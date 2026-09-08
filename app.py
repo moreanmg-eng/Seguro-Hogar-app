@@ -46,6 +46,7 @@ ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD", "cambia-esta-clave")
 ASSETS_DIR = Path(__file__).parent / "assets"
 LOGO_BROKER = ASSETS_DIR / "logo_raspberry.png"
 LOGO_ASEGURADORA = ASSETS_DIR / "logo_zurich.png"
+AVISO_PRIVACIDAD_PATH = ASSETS_DIR / "aviso_privacidad.md"
 
 st.set_page_config(page_title="Cotizador de Seguro de Hogar", page_icon="🏠", layout="centered")
 
@@ -162,8 +163,10 @@ if vista == "Cliente":
     if es_personalizada:
         suma_deseada = st.number_input(
             "¿Con qué suma asegurada te gustaría asegurar tu inmueble? (MXN) *",
-            min_value=0.0, step=100000.0, format="%.0f", key="c_suma_deseada",
+            min_value=0.0, step=500000.0, format="%.0f", key="c_suma_deseada",
         )
+        if suma_deseada:
+            st.caption(f"Suma que se cotizará: **${suma_deseada:,.0f} MXN**")
         st.caption(
             "Esta opción no genera una cotización automática: un asesor "
             "revisará tu solicitud y te cotizará directamente."
@@ -181,7 +184,16 @@ if vista == "Cliente":
         )
 
     st.divider()
-    if st.button("Cotizar", type="primary"):
+    if AVISO_PRIVACIDAD_PATH.exists():
+        with st.expander("📄 Ver Aviso de Privacidad"):
+            st.markdown(AVISO_PRIVACIDAD_PATH.read_text(encoding="utf-8"))
+        acepto_privacidad = st.checkbox(
+            "He leído y acepto el Aviso de Privacidad *", key="c_acepto_privacidad",
+        )
+    else:
+        acepto_privacidad = True  # si no existe el archivo, no se bloquea la cotización
+
+    if st.button("Cotizar", type="primary", disabled=not acepto_privacidad):
         faltantes = []
         if not nombre: faltantes.append("nombre completo")
         if not correo: faltantes.append("correo")
