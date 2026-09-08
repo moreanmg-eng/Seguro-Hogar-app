@@ -22,13 +22,16 @@ print("\n1) Cliente propietario cotiza Paquete 2 con Terremoto (CP 01000)...")
 fin_vigencia = db.get_fecha_fin_vigencia()
 resultado = cotizador.calcular_prima("propietario", "Paquete 2", "01000", True, fin_vigencia)
 assert resultado["prima_total"] > 0
+assert resultado["municipio"] and resultado["estado"], "Debería detectar municipio/estado para un CP válido"
 print("   Prima total:", round(resultado["prima_total"], 2), "| días restantes:", resultado["dias_restantes"])
+print("   Municipio/Estado detectados:", resultado["municipio"], "-", resultado["estado"])
 
 cot_id = db.crear_cotizacion(
     cliente_nombre="Juan Pérez", nomina="L012345", forma_pago="Nómina", cliente_correo="juan@example.com",
     cliente_telefono="5512345678", codigo_postal=resultado["codigo_postal"],
     tipo_cliente="propietario", es_para_otro=0, beneficiario_nombre="", beneficiario_relacion="",
     calle="Av. Reforma", numero_ext="123", numero_int="4", colonia="Centro",
+    municipio=resultado["municipio"], estado_inmueble=resultado["estado"],
     paquete=resultado["paquete"], tipo_paquete=resultado["tipo_paquete"],
     incluye_terremoto=int(resultado["incluye_terremoto"]),
     zona_hidro_key=resultado["zona_hidro_key"], zona_tev_num=resultado["zona_tev_num"],
@@ -43,6 +46,7 @@ datos_cliente = dict(
     nombre="Juan Pérez", nomina="EMP-001", correo="juan@example.com", telefono="5512345678",
     tipo_cliente="propietario", calle="Av. Reforma", numero_ext="123", numero_int="4",
     colonia="Centro", es_para_otro=False, beneficiario_nombre="", beneficiario_relacion="",
+    municipio=resultado["municipio"], estado=resultado["estado"],
 )
 ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id)
 db.actualizar_cotizacion(cot_id, pdf_cotizacion_path=ruta_pdf)
@@ -86,7 +90,9 @@ print("\n6) Cliente arrendatario cotiza paquete Estándar (sin zona, CP inventad
 resultado_std = cotizador.calcular_prima("estandar", "Estándar", "20000", False, fin_vigencia)
 assert resultado_std["hidro_adder"] == 0 and resultado_std["tev_adder"] == 0
 assert round(resultado_std["prima_base_anual"], 2) == 534.24
+assert resultado_std["municipio"] and resultado_std["estado"], "Estándar también debería traer municipio/estado"
 print("   Prima total Estándar:", round(resultado_std["prima_total"], 2))
+print("   Municipio/Estado (Estándar):", resultado_std["municipio"], "-", resultado_std["estado"])
 
 print("\n7) Cliente pide suma personalizada (solicitud manual, sin PDF)...")
 cot_id_manual = db.crear_cotizacion(
@@ -107,5 +113,11 @@ try:
     print("   ERROR: debería haber lanzado ValueError")
 except ValueError as e:
     print("   OK, error esperado:", e)
+
+print("\n9) CP fuera de catálogo con paquete Estándar NO debe fallar (no necesita zona)...")
+resultado_std_sin_cp = cotizador.calcular_prima("estandar", "Estándar", "99999", False, fin_vigencia)
+assert resultado_std_sin_cp["municipio"] is None and resultado_std_sin_cp["estado"] is None
+assert resultado_std_sin_cp["prima_total"] > 0
+print("   OK, cotiza sin problema y sin municipio/estado (CP desconocido).")
 
 print("\n✅ Flujo completo probado sin errores.")

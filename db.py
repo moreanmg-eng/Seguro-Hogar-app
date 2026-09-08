@@ -71,6 +71,8 @@ def init_db():
                 numero_ext TEXT,
                 numero_int TEXT,
                 colonia TEXT,
+                municipio TEXT,                      -- detectado a partir del código postal
+                estado_inmueble TEXT,                 -- detectado a partir del código postal
                 paquete TEXT,                        -- 'Paquete 1'..'Paquete 4' o NULL si es solicitud manual
                 tipo_paquete TEXT,                    -- 'propietario' | 'arrendatario' | 'estandar'
                 es_solicitud_manual INTEGER NOT NULL DEFAULT 0,
@@ -128,6 +130,8 @@ _COLUMNAS_NUEVAS = {
     "rfc": "TEXT",
     "notas_cliente": "TEXT",
     "forma_pago": "TEXT",
+    "municipio": "TEXT",
+    "estado_inmueble": "TEXT",
 }
 
 

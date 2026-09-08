@@ -113,8 +113,16 @@ def calcular_prima(tipo_paquete: str, paquete_nombre: str, codigo_postal: str,
     zona_hidro_key = None
     zona_tev_num = None
 
+    # El municipio/estado son solo informativos (para mostrarlos en la
+    # cotización) y se buscan siempre, sin importar el paquete — el
+    # paquete Estándar no necesita la zona de riesgo, pero igual
+    # queremos mostrar dónde está el inmueble si el CP existe en el
+    # catálogo.
+    zona = buscar_zona(codigo_postal)
+    municipio = zona.get("municipio") if zona else None
+    estado_inmueble = zona.get("estado") if zona else None
+
     if tipo_paquete != "estandar":
-        zona = buscar_zona(codigo_postal)
         if zona is None:
             raise ValueError(
                 f"El código postal '{codigo_postal}' no está en nuestro catálogo de zonas. "
@@ -154,6 +162,8 @@ def calcular_prima(tipo_paquete: str, paquete_nombre: str, codigo_postal: str,
         "tipo_paquete": tipo_paquete,
         "paquete": paquete_nombre,
         "codigo_postal": str(codigo_postal).strip().zfill(5),
+        "municipio": municipio,
+        "estado": estado_inmueble,
         "suma_edificio_incendio": paquete["suma_edificio_incendio"],
         "suma_contenidos_incendio": paquete["suma_contenidos_incendio"],
         "suma_edificio_remocion_escombros": paquete["suma_edificio_remocion_escombros"],

@@ -110,6 +110,8 @@ def generar_pdf_cotizacion(datos_cliente: dict, cotizacion: dict, cotizacion_id:
         f"Int. {datos_cliente.get('numero_int')}" if datos_cliente.get("numero_int") else None,
         datos_cliente.get("colonia"),
         f"CP {cotizacion['codigo_postal']}",
+        datos_cliente.get("municipio"),
+        datos_cliente.get("estado"),
     ]))
     datos_tabla.append(["Dirección del inmueble", direccion or "—"])
 

@@ -102,6 +102,16 @@ if vista == "Cliente":
     with col2:
         telefono = st.text_input("Teléfono", key="c_telefono")
         codigo_postal = st.text_input("Código postal *", max_chars=5, key="c_cp")
+        municipio_detectado = estado_detectado = None
+        cp_limpio = (codigo_postal or "").strip()
+        if len(cp_limpio) == 5 and cp_limpio.isdigit():
+            zona_cp = cotizador.buscar_zona(cp_limpio)
+            if zona_cp and zona_cp.get("municipio") and zona_cp.get("estado"):
+                municipio_detectado = zona_cp["municipio"]
+                estado_detectado = zona_cp["estado"]
+                st.caption(f"📍 {municipio_detectado}, {estado_detectado}")
+            else:
+                st.caption("No encontramos ese código postal en nuestro catálogo.")
 
     tipo_cliente_label = st.radio(
         "¿Eres propietario o arrendatario del inmueble?",
@@ -218,6 +228,7 @@ if vista == "Cliente":
                 tipo_cliente=tipo_cliente, es_para_otro=int(es_para_otro),
                 beneficiario_nombre=beneficiario_nombre, beneficiario_relacion=beneficiario_relacion,
                 calle=calle, numero_ext=numero_ext, numero_int=numero_int, colonia=colonia,
+                municipio=municipio_detectado, estado_inmueble=estado_detectado,
                 es_solicitud_manual=1, suma_deseada=suma_deseada,
             )
             cot = db.obtener(cot_id)
@@ -243,6 +254,7 @@ if vista == "Cliente":
                     tipo_cliente=tipo_cliente, es_para_otro=int(es_para_otro),
                     beneficiario_nombre=beneficiario_nombre, beneficiario_relacion=beneficiario_relacion,
                     calle=calle, numero_ext=numero_ext, numero_int=numero_int, colonia=colonia,
+                    municipio=resultado["municipio"], estado_inmueble=resultado["estado"],
                     paquete=resultado["paquete"], tipo_paquete=resultado["tipo_paquete"],
                     incluye_terremoto=int(resultado["incluye_terremoto"]),
                     zona_hidro_key=resultado["zona_hidro_key"], zona_tev_num=resultado["zona_tev_num"],
@@ -258,6 +270,7 @@ if vista == "Cliente":
                     tipo_cliente=tipo_cliente, calle=calle, numero_ext=numero_ext,
                     numero_int=numero_int, colonia=colonia, es_para_otro=es_para_otro,
                     beneficiario_nombre=beneficiario_nombre, beneficiario_relacion=beneficiario_relacion,
+                    municipio=resultado["municipio"], estado=resultado["estado"],
                 )
                 ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id)
                 db.actualizar_cotizacion(cot_id, pdf_cotizacion_path=ruta_pdf)
