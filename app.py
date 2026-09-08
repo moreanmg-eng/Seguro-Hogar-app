@@ -3,18 +3,21 @@ Portal de cotización de seguro de hogar — app.py
 
 Tres vistas dentro de la misma app (selector en la barra lateral):
 
-  1. Cliente        -> cotiza, descarga PDF, decide si quiere contratar
-  2. Asesor         -> (con login) ve a sus prospectos interesados,
-                        confirma cuando está listo para que se emita
-  3. Administrador  -> (con password) sube la póliza ya emitida,
-                        lo que notifica al asesor para que la comparta
+  1. Cliente        -> cotiza (3 secciones), descarga PDF, decide si
+                        quiere contratar
+  2. Asesor         -> (con login) ve a sus prospectos interesados y
+                        solicitudes manuales, confirma cuando está
+                        listo para que se emita
+  3. Administrador  -> (con password) define la fecha de fin de
+                        vigencia, sube la póliza ya emitida
 
 Para correrla:
     streamlit run app.py
 """
 
+import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 import streamlit as st
 
 import db
@@ -26,9 +29,33 @@ from config import get_secret
 
 db.init_db()
 
+# Verificación básica de formato de RFC (no exhaustiva: no valida dígito
+# verificador). 3-4 letras + 6 dígitos (fecha) + 2-3 caracteres alfanuméricos
+# = 12 caracteres (persona moral) o 13 (persona física).
+_RFC_REGEX = re.compile(r"^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{2,3}$")
+
+
+def _rfc_parece_valido(rfc: str) -> bool:
+    return bool(_RFC_REGEX.match(rfc.strip().upper())) if rfc else False
+
+
+PLACEHOLDER_PAGO = "Selecciona una opción"
+
 ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD", "cambia-esta-clave")
 
+ASSETS_DIR = Path(__file__).parent / "assets"
+LOGO_BROKER = ASSETS_DIR / "logo_raspberry.png"
+LOGO_ASEGURADORA = ASSETS_DIR / "logo_zurich.png"
+
 st.set_page_config(page_title="Cotizador de Seguro de Hogar", page_icon="🏠", layout="centered")
+
+if LOGO_BROKER.exists() or LOGO_ASEGURADORA.exists():
+    col_logo_izq, col_logo_der = st.columns([3, 1])
+    if LOGO_BROKER.exists():
+        col_logo_izq.image(str(LOGO_BROKER), width=170)
+    if LOGO_ASEGURADORA.exists():
+        col_logo_der.image(str(LOGO_ASEGURADORA), width=90)
+
 
 def avisar_si_fallo_correo(resultado: dict | None):
     """Muestra un aviso en pantalla si el envío de correo falló, sin
@@ -47,14 +74,15 @@ ESTATUS_LEGIBLE = {
     "confirmado_por_asesor": "Confirmado por asesor, listo para emitir",
     "emitida": "Póliza emitida",
     "entregada": "Entregada al cliente",
+    "solicitud_manual": "Requiere cotización manual",
 }
 
 vista = st.sidebar.radio("¿Quién eres?", ["Cliente", "Asesor", "Administrador"])
 if email_utils.MODO_SIMULADO:
     st.sidebar.warning(
-        "Modo simulado: no hay credenciales SMTP configuradas en .env, "
-        "así que los correos se guardan en correos_simulados/ en vez de "
-        "enviarse de verdad. Útil para probar todo el flujo."
+        "Modo simulado: no hay credenciales de correo configuradas, así que "
+        "los correos se guardan en correos_simulados/ en vez de enviarse de "
+        "verdad. Útil para probar todo el flujo."
     )
 
 # =======================================================================
@@ -62,83 +90,252 @@ if email_utils.MODO_SIMULADO:
 # =======================================================================
 if vista == "Cliente":
     st.title("🏠 Cotiza tu Seguro de Hogar")
-
-    paquetes_df = cotizador.cargar_paquetes()
     asesores_df = asesores_mod.cargar_asesores()
 
-    with st.form("form_cotizacion"):
-        col1, col2 = st.columns(2)
-        with col1:
-            nombre = st.text_input("Nombre completo *")
-            correo = st.text_input("Correo electrónico *")
-        with col2:
-            telefono = st.text_input("Teléfono")
-            codigo_postal = st.text_input("Código postal *", max_chars=5)
+    st.subheader("1. Tus datos")
+    col1, col2 = st.columns(2)
+    with col1:
+        nombre = st.text_input("Nombre completo *", key="c_nombre")
+        nomina = st.text_input("Nómina / Matrícula", key="c_nomina")
+        correo = st.text_input("Correo electrónico *", key="c_correo")
+    with col2:
+        telefono = st.text_input("Teléfono", key="c_telefono")
+        codigo_postal = st.text_input("Código postal *", max_chars=5, key="c_cp")
 
-        paquete_elegido = st.selectbox("Paquete de interés *", paquetes_df["paquete"].tolist())
-        enviado = st.form_submit_button("Cotizar")
+    tipo_cliente_label = st.radio(
+        "¿Eres propietario o arrendatario del inmueble?",
+        ["Propietario", "Arrendatario"], key="c_tipo_cliente", horizontal=True,
+    )
+    tipo_cliente = "propietario" if tipo_cliente_label == "Propietario" else "arrendatario"
 
-    if enviado:
-        if not nombre or not correo or not codigo_postal:
-            st.error("Por favor completa nombre, correo y código postal.")
+    para_otro_label = st.radio(
+        "¿El seguro es para ti o deseas extender el beneficio a alguien más?",
+        ["Para mí", "Para alguien más"], key="c_para_otro", horizontal=True,
+    )
+    es_para_otro = para_otro_label == "Para alguien más"
+    beneficiario_nombre = beneficiario_relacion = ""
+    if es_para_otro:
+        bc1, bc2 = st.columns(2)
+        beneficiario_nombre = bc1.text_input("Nombre completo del beneficiario *", key="c_ben_nombre")
+        beneficiario_relacion = bc2.text_input("Relación con el titular *", key="c_ben_relacion")
+
+    # Forma de pago: se detecta según el formato de la nómina/matrícula
+    # capturada arriba (L0... = nómina, tiene las 3 opciones; A0... =
+    # matrícula, solo domiciliado o contado).
+    nomina_valor = (nomina or "").strip().upper()
+    forma_pago = None
+    if nomina_valor.startswith("L0"):
+        forma_pago = st.selectbox(
+            "Forma de pago deseada *",
+            [PLACEHOLDER_PAGO, "Nómina", "Domiciliado mensual", "Contado"],
+            key="c_forma_pago",
+        )
+    elif nomina_valor.startswith("A0"):
+        forma_pago = st.selectbox(
+            "Forma de pago deseada *",
+            [PLACEHOLDER_PAGO, "Domiciliado mensual", "Contado"],
+            key="c_forma_pago",
+        )
+    elif nomina_valor:
+        st.caption(
+            "No reconocemos el formato de tu nómina/matrícula (debe iniciar con "
+            "L0 para nómina o A0 para matrícula), así que no te mostramos "
+            "opciones de forma de pago. Puedes continuar sin problema."
+        )
+
+    st.divider()
+    st.subheader("2. El inmueble y el paquete")
+    dc1, dc2, dc3, dc4 = st.columns([2, 1, 1, 2])
+    calle = dc1.text_input("Calle *", key="c_calle")
+    numero_ext = dc2.text_input("Número ext. *", key="c_num_ext")
+    numero_int = dc3.text_input("Número int.", key="c_num_int")
+    colonia = dc4.text_input("Colonia *", key="c_colonia")
+
+    opciones = cotizador.paquetes_disponibles(tipo_cliente)
+    OPCION_PERSONALIZADA = "Deseo asegurar con una suma mayor a la de los paquetes"
+    etiquetas = [o["etiqueta"] for o in opciones] + [OPCION_PERSONALIZADA]
+    etiqueta_elegida = st.selectbox("Paquete de interés *", etiquetas, key="c_paquete_etiqueta")
+
+    es_personalizada = etiqueta_elegida == OPCION_PERSONALIZADA
+    opcion_elegida = None
+    suma_deseada = 0.0
+    if es_personalizada:
+        suma_deseada = st.number_input(
+            "¿Con qué suma asegurada te gustaría asegurar tu inmueble? (MXN) *",
+            min_value=0.0, step=100000.0, format="%.0f", key="c_suma_deseada",
+        )
+        st.caption(
+            "Esta opción no genera una cotización automática: un asesor "
+            "revisará tu solicitud y te cotizará directamente."
+        )
+    else:
+        opcion_elegida = next(o for o in opciones if o["etiqueta"] == etiqueta_elegida)
+
+    incluye_terremoto = False
+    if opcion_elegida and opcion_elegida["tipo_paquete"] != "estandar":
+        st.divider()
+        st.subheader("3. Cobertura adicional")
+        incluye_terremoto = st.checkbox(
+            "¿Deseas agregar cobertura de Terremoto y/o erupción volcánica?",
+            key="c_terremoto",
+        )
+
+    st.divider()
+    if st.button("Cotizar", type="primary"):
+        faltantes = []
+        if not nombre: faltantes.append("nombre completo")
+        if not correo: faltantes.append("correo")
+        if not codigo_postal or len(codigo_postal.strip()) != 5 or not codigo_postal.strip().isdigit():
+            faltantes.append("código postal (5 dígitos)")
+        if not calle: faltantes.append("calle")
+        if not numero_ext: faltantes.append("número exterior")
+        if not colonia: faltantes.append("colonia")
+        if es_para_otro and (not beneficiario_nombre or not beneficiario_relacion):
+            faltantes.append("nombre y relación del beneficiario")
+        if es_personalizada and suma_deseada <= 0:
+            faltantes.append("suma asegurada deseada")
+        if forma_pago == PLACEHOLDER_PAGO:
+            faltantes.append("forma de pago deseada")
+
+        if faltantes:
+            st.error("Falta completar: " + ", ".join(faltantes))
+        elif es_personalizada:
+            cot_id = db.crear_cotizacion(
+                cliente_nombre=nombre, nomina=nomina, forma_pago=forma_pago, cliente_correo=correo,
+                cliente_telefono=telefono, codigo_postal=codigo_postal.strip(),
+                tipo_cliente=tipo_cliente, es_para_otro=int(es_para_otro),
+                beneficiario_nombre=beneficiario_nombre, beneficiario_relacion=beneficiario_relacion,
+                calle=calle, numero_ext=numero_ext, numero_int=numero_int, colonia=colonia,
+                es_solicitud_manual=1, suma_deseada=suma_deseada,
+            )
+            cot = db.obtener(cot_id)
+            r = email_utils.notificar_solicitud_manual(cot)
+            avisar_si_fallo_correo(r)
+            st.success(
+                "¡Gracias! Tu información ya fue recabada. Un asesor se pondrá "
+                "en contacto contigo pronto para cotizar tu caso."
+            )
         else:
+            fin_vigencia = db.get_fecha_fin_vigencia()
             try:
-                resultado = cotizador.calcular_prima(paquete_elegido, codigo_postal)
+                resultado = cotizador.calcular_prima(
+                    opcion_elegida["tipo_paquete"], opcion_elegida["paquete"],
+                    codigo_postal.strip(), incluye_terremoto, fin_vigencia,
+                )
             except ValueError as e:
                 st.error(str(e))
             else:
-                cotizacion_id = db.crear_cotizacion(
-                    cliente_nombre=nombre, cliente_correo=correo,
-                    cliente_telefono=telefono, codigo_postal=codigo_postal,
-                    paquete=paquete_elegido, prima_total_anual=resultado["prima_total_anual"],
-                    pdf_cotizacion_path=None,
+                cot_id = db.crear_cotizacion(
+                    cliente_nombre=nombre, nomina=nomina, forma_pago=forma_pago, cliente_correo=correo,
+                    cliente_telefono=telefono, codigo_postal=resultado["codigo_postal"],
+                    tipo_cliente=tipo_cliente, es_para_otro=int(es_para_otro),
+                    beneficiario_nombre=beneficiario_nombre, beneficiario_relacion=beneficiario_relacion,
+                    calle=calle, numero_ext=numero_ext, numero_int=numero_int, colonia=colonia,
+                    paquete=resultado["paquete"], tipo_paquete=resultado["tipo_paquete"],
+                    incluye_terremoto=int(resultado["incluye_terremoto"]),
+                    zona_hidro_key=resultado["zona_hidro_key"], zona_tev_num=resultado["zona_tev_num"],
+                    prima_base_anual=resultado["prima_base_anual"], hidro_adder=resultado["hidro_adder"],
+                    tev_adder=resultado["tev_adder"], prima_anual_total=resultado["prima_anual_total"],
+                    dias_restantes=resultado["dias_restantes"],
+                    fecha_fin_vigencia_usada=resultado["fecha_fin_vigencia"].isoformat(),
+                    prima_neta_prorateada=resultado["prima_neta_prorateada"], iva=resultado["iva"],
+                    derecho_emision=resultado["derecho_emision"], prima_total=resultado["prima_total"],
                 )
-                ruta_pdf = pdf_generator.generar_pdf_cotizacion(
-                    nombre, correo, telefono, resultado, cotizacion_id
+                datos_cliente = dict(
+                    nombre=nombre, nomina=nomina, forma_pago=forma_pago, correo=correo, telefono=telefono,
+                    tipo_cliente=tipo_cliente, calle=calle, numero_ext=numero_ext,
+                    numero_int=numero_int, colonia=colonia, es_para_otro=es_para_otro,
+                    beneficiario_nombre=beneficiario_nombre, beneficiario_relacion=beneficiario_relacion,
                 )
-                with db._conn() as conn:
-                    conn.execute("UPDATE cotizaciones SET pdf_cotizacion_path = ? WHERE id = ?",
-                                 (ruta_pdf, cotizacion_id))
-                    conn.commit()
+                ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id)
+                db.actualizar_cotizacion(cot_id, pdf_cotizacion_path=ruta_pdf)
 
-                st.session_state["ultima_cotizacion_id"] = cotizacion_id
-                st.success(f"¡Cotización lista! Folio {cotizacion_id:05d}")
-                st.metric("Prima total anual", f"${resultado['prima_total_anual']:,.2f} MXN")
+                st.session_state["ultima_cotizacion_id"] = cot_id
+                st.success(f"¡Cotización lista! Folio {cot_id:05d}")
+                st.metric("Prima total a pagar", f"${resultado['prima_total']:,.2f} MXN",
+                          help=f"Prorrateada por {resultado['dias_restantes']} días restantes de vigencia")
 
                 with open(ruta_pdf, "rb") as f:
                     st.download_button("📄 Descargar cotización en PDF", f,
                                         file_name=Path(ruta_pdf).name, mime="application/pdf")
 
-    # Paso 2: decisión de contratar, para la última cotización generada en esta sesión
+    # Paso final: decisión de contratar, para la última cotización generada en esta sesión
     if "ultima_cotizacion_id" in st.session_state:
         st.divider()
         cot_id = st.session_state["ultima_cotizacion_id"]
         cot = db.obtener(cot_id)
         if cot and cot["estatus"] == "cotizada":
             st.subheader("¿Deseas contratar esta póliza?")
+            opcion_decision = st.radio(
+                "¿Qué te gustaría hacer?",
+                [
+                    "Sí, quiero contratar",
+                    "Quiero que un asesor me contacte para más información",
+                    "Por ahora no, gracias",
+                ],
+                key="c_decision",
+            )
             asesor_pref = st.selectbox(
                 "Asesor de preferencia (opcional)",
                 ["Cualquiera disponible"] + asesores_df["nombre"].tolist(),
                 key="asesor_pref",
             )
-            c1, c2 = st.columns(2)
-            if c1.button("✅ Sí, quiero contratar"):
-                asesor_asignado = None if asesor_pref == "Cualquiera disponible" else asesor_pref
-                db.marcar_interesado(cot_id, asesor_asignado)
-                cot_actualizada = db.obtener(cot_id)
 
-                # A quién notificar: el asesor elegido, o el primero de la lista si no eligió
-                nombre_para_correo = asesor_asignado or asesores_df.iloc[0]["nombre"]
-                correo_asesor = asesores_mod.correo_de(nombre_para_correo)
-                if correo_asesor:
-                    r = email_utils.notificar_asesor_nuevo_interesado(cot_actualizada, correo_asesor)
-                    avisar_si_fallo_correo(r)
+            rfc_ingresado = ""
+            rfc_valido = True
+            if opcion_decision == "Sí, quiero contratar":
+                st.info(
+                    "Para confirmar que quieres contratar, por favor ingresa tu RFC "
+                    "(lo necesitamos para poder emitir tu póliza)."
+                )
+                rfc_ingresado = st.text_input("RFC *", key="c_rfc_confirmar", max_chars=13)
+                rfc_valido = _rfc_parece_valido(rfc_ingresado)
+                if rfc_ingresado and not rfc_valido:
+                    st.caption("⚠️ Verifica tu RFC: debe tener 12 o 13 caracteres (letras y números).")
+                if st.button("✅ Confirmar contratación", disabled=not (rfc_ingresado and rfc_valido)):
+                    asesor_asignado = None if asesor_pref == "Cualquiera disponible" else asesor_pref
+                    db.marcar_interesado(
+                        cot_id, asesor_asignado,
+                        rfc=rfc_ingresado.strip().upper(),
+                        notas_cliente="Confirmó que quiere contratar.",
+                    )
+                    cot_actualizada = db.obtener(cot_id)
 
-                st.success("¡Gracias! Un asesor se pondrá en contacto contigo en breve.")
-                del st.session_state["ultima_cotizacion_id"]
-            if c2.button("No por ahora"):
-                st.info("Sin problema, tu cotización queda guardada por si decides contratar después.")
-                del st.session_state["ultima_cotizacion_id"]
+                    nombre_para_correo = asesor_asignado or asesores_df.iloc[0]["nombre"]
+                    correo_asesor = asesores_mod.correo_de(nombre_para_correo)
+                    if correo_asesor:
+                        r = email_utils.notificar_asesor_nuevo_interesado(cot_actualizada, correo_asesor)
+                        avisar_si_fallo_correo(r)
+
+                    st.success("¡Gracias! Un asesor se pondrá en contacto contigo en breve.")
+                    del st.session_state["ultima_cotizacion_id"]
+
+            elif opcion_decision == "Quiero que un asesor me contacte para más información":
+                rfc_ingresado = st.text_input(
+                    "RFC (opcional, si ya lo tienes a la mano)", key="c_rfc_info", max_chars=13,
+                )
+                if st.button("📞 Solicitar contacto de un asesor"):
+                    asesor_asignado = None if asesor_pref == "Cualquiera disponible" else asesor_pref
+                    db.marcar_interesado(
+                        cot_id, asesor_asignado,
+                        rfc=(rfc_ingresado.strip().upper() or None),
+                        notas_cliente="Quiere más información antes de decidir.",
+                    )
+                    cot_actualizada = db.obtener(cot_id)
+
+                    nombre_para_correo = asesor_asignado or asesores_df.iloc[0]["nombre"]
+                    correo_asesor = asesores_mod.correo_de(nombre_para_correo)
+                    if correo_asesor:
+                        r = email_utils.notificar_asesor_nuevo_interesado(cot_actualizada, correo_asesor)
+                        avisar_si_fallo_correo(r)
+
+                    st.success("¡Gracias! Un asesor se pondrá en contacto contigo en breve.")
+                    del st.session_state["ultima_cotizacion_id"]
+
+            else:
+                if st.button("Continuar"):
+                    st.info("Sin problema, tu cotización queda guardada por si decides contratar después.")
+                    del st.session_state["ultima_cotizacion_id"]
 
 # =======================================================================
 # VISTA ASESOR
@@ -171,7 +368,6 @@ elif vista == "Asesor":
 
     st.divider()
     st.subheader("Prospectos interesados (pendientes de confirmar emisión)")
-
     interesados = [
         c for c in db.listar(estatus="interesado")
         if c["asesor_asignado"] in (None, "", asesor["nombre"])
@@ -179,11 +375,16 @@ elif vista == "Asesor":
     if not interesados:
         st.info("No tienes prospectos pendientes por ahora.")
     for cot in interesados:
-        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — {cot['paquete']}"):
+        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
             st.write(f"**Correo:** {cot['cliente_correo']}")
             st.write(f"**Teléfono:** {cot['cliente_telefono']}")
-            st.write(f"**Prima anual:** ${cot['prima_total_anual']:,.2f} MXN")
+            st.write(f"**RFC:** {cot.get('rfc') or '— (no lo dejó)'}")
+            st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
+            st.write(f"**Motivo:** {cot.get('notas_cliente') or '—'}")
+            st.write(f"**Prima total:** ${cot['prima_total']:,.2f} MXN")
             st.write(f"**Código postal:** {cot['codigo_postal']}")
+            direccion = ", ".join(filter(None, [cot.get("calle"), cot.get("numero_ext"), cot.get("colonia")]))
+            st.write(f"**Dirección:** {direccion or '—'}")
             if cot["pdf_cotizacion_path"] and Path(cot["pdf_cotizacion_path"]).exists():
                 with open(cot["pdf_cotizacion_path"], "rb") as f:
                     st.download_button("📄 Ver cotización", f, file_name=Path(cot["pdf_cotizacion_path"]).name,
@@ -196,6 +397,29 @@ elif vista == "Asesor":
                 avisar_si_fallo_correo(r)
                 st.success("Confirmado. Se notificó al administrador para que emita la póliza.")
                 st.rerun()
+
+    st.divider()
+    st.subheader("Solicitudes de cotización manual (suma mayor a los paquetes)")
+    manuales = [
+        c for c in db.listar(estatus="solicitud_manual")
+        if c["asesor_asignado"] in (None, "", asesor["nombre"])
+    ]
+    if not manuales:
+        st.info("No hay solicitudes manuales pendientes por ahora.")
+    for cot in manuales:
+        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — suma deseada ${cot['suma_deseada']:,.0f}"):
+            st.write(f"**Correo:** {cot['cliente_correo']}")
+            st.write(f"**Teléfono:** {cot['cliente_telefono']}")
+            st.write(f"**Nómina/Matrícula:** {cot.get('nomina') or '—'}")
+            st.write(f"**Tipo:** {'Propietario' if cot['tipo_cliente']=='propietario' else 'Arrendatario'}")
+            st.write(f"**Código postal:** {cot['codigo_postal']}")
+            if not cot["asesor_asignado"]:
+                if st.button("Asignarme este caso", key=f"asignar_{cot['id']}"):
+                    db.actualizar_cotizacion(cot["id"], asesor_asignado=asesor["nombre"])
+                    st.success("Caso asignado. Da seguimiento por fuera del portal para cotizarlo.")
+                    st.rerun()
+            else:
+                st.caption(f"Asignado a {cot['asesor_asignado']}")
 
     st.divider()
     st.subheader("Pólizas emitidas, listas para compartir con el cliente")
@@ -239,15 +463,33 @@ elif vista == "Administrador":
         st.rerun()
 
     st.divider()
+    st.subheader("Fin de vigencia de la póliza de flotilla")
+    st.caption(
+        "Toda cotización se prorratea desde el día en que se hace hasta esta "
+        "fecha. Actualízala cada vez que renueve la flotilla (normalmente el "
+        "1 de enero)."
+    )
+    fin_actual = db.get_fecha_fin_vigencia()
+    if fin_actual < date.today():
+        st.warning(f"⚠️ La fecha de fin de vigencia ({fin_actual.strftime('%d/%m/%Y')}) ya pasó. Actualízala antes de seguir cotizando.")
+    nueva_fecha = st.date_input("Fecha de fin de vigencia", value=fin_actual, key="fin_vigencia_input")
+    if st.button("Guardar fecha de fin de vigencia"):
+        db.set_fecha_fin_vigencia(nueva_fecha)
+        st.success(f"Actualizada a {nueva_fecha.strftime('%d/%m/%Y')}. Las cotizaciones nuevas usarán esta fecha.")
+        st.rerun()
+
+    st.divider()
     st.subheader("Confirmados por asesor, pendientes de emitir")
     pendientes = db.listar(estatus="confirmado_por_asesor")
     if not pendientes:
         st.info("No hay pólizas pendientes de emitir por ahora.")
     for cot in pendientes:
-        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — {cot['paquete']}"):
+        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
             st.write(f"**Asesor:** {cot['asesor_asignado']}")
+            st.write(f"**RFC:** {cot.get('rfc') or '⚠️ no lo dejó — pídeselo antes de emitir'}")
+            st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
             st.write(f"**Notas del asesor:** {cot['notas'] or '—'}")
-            st.write(f"**Prima anual:** ${cot['prima_total_anual']:,.2f} MXN")
+            st.write(f"**Prima total:** ${cot['prima_total']:,.2f} MXN")
             archivo = st.file_uploader("Subir PDF de la póliza emitida", type="pdf", key=f"upload_{cot['id']}")
             if archivo and st.button("Confirmar emisión y notificar al asesor", key=f"emitir_{cot['id']}"):
                 ruta_destino = db.POLIZAS_DIR / f"poliza_{cot['id']:05d}.pdf"
@@ -261,6 +503,17 @@ elif vista == "Administrador":
                     avisar_si_fallo_correo(r)
                 st.success("Póliza registrada y asesor notificado.")
                 st.rerun()
+
+    st.divider()
+    st.subheader("Solicitudes de cotización manual")
+    manuales = db.listar(estatus="solicitud_manual")
+    if not manuales:
+        st.info("No hay solicitudes manuales pendientes.")
+    for cot in manuales:
+        st.write(
+            f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — suma deseada "
+            f"${cot['suma_deseada']:,.0f} — asesor: {cot['asesor_asignado'] or 'sin asignar'}"
+        )
 
     st.divider()
     st.subheader("Panel general de todas las cotizaciones")
@@ -280,10 +533,12 @@ elif vista == "Administrador":
         import io
 
         df = pd.DataFrame(todas)
-        df_mostrar = df[[
-            "id", "fecha_creacion", "cliente_nombre", "paquete",
-            "prima_total_anual", "estatus", "asesor_asignado"
-        ]].copy()
+        columnas_mostrar = [c for c in [
+            "id", "fecha_creacion", "cliente_nombre", "tipo_cliente", "paquete",
+            "tipo_paquete", "prima_total", "suma_deseada", "forma_pago", "rfc",
+            "estatus", "asesor_asignado",
+        ] if c in df.columns]
+        df_mostrar = df[columnas_mostrar].copy()
         df_mostrar["estatus"] = df_mostrar["estatus"].map(ESTATUS_LEGIBLE).fillna(df_mostrar["estatus"])
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
 

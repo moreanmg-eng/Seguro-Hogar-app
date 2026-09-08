@@ -100,10 +100,13 @@ def notificar_asesor_nuevo_interesado(cotizacion: dict, correo_asesor: str):
     cuerpo = (
         f"Hola,\n\nEl cliente {cotizacion['cliente_nombre']} indicó que quiere "
         f"contratar el seguro de hogar que cotizó.\n\n"
+        f"Motivo: {cotizacion.get('notas_cliente') or '—'}\n"
         f"Folio: {cotizacion['id']:05d}\n"
-        f"Paquete: {cotizacion['paquete']}\n"
-        f"Prima total anual: ${cotizacion['prima_total_anual']:,.2f} MXN\n"
-        f"Código postal: {cotizacion['codigo_postal']}\n\n"
+        f"Paquete: {cotizacion['paquete']} ({cotizacion['tipo_paquete']})\n"
+        f"Prima total: ${cotizacion['prima_total']:,.2f} MXN\n"
+        f"Código postal: {cotizacion['codigo_postal']}\n"
+        f"Forma de pago deseada: {cotizacion.get('forma_pago') or '—'}\n"
+        f"RFC: {cotizacion.get('rfc') or '— (no lo dejó, pídeselo antes de que se emita)'}\n\n"
         f"Datos de contacto del cliente:\n"
         f"  Correo: {cotizacion['cliente_correo']}\n"
         f"  Teléfono: {cotizacion['cliente_telefono']}\n\n"
@@ -120,8 +123,10 @@ def notificar_admin_confirmacion_asesor(cotizacion: dict, asesor_nombre: str):
         f"Hola,\n\n{asesor_nombre} confirmó que el cliente "
         f"{cotizacion['cliente_nombre']} está listo para que emitas la póliza.\n\n"
         f"Folio: {cotizacion['id']:05d}\n"
-        f"Paquete: {cotizacion['paquete']}\n"
-        f"Prima total anual: ${cotizacion['prima_total_anual']:,.2f} MXN\n"
+        f"Paquete: {cotizacion['paquete']} ({cotizacion['tipo_paquete']})\n"
+        f"Prima total: ${cotizacion['prima_total']:,.2f} MXN\n"
+        f"Forma de pago deseada: {cotizacion.get('forma_pago') or '—'}\n"
+        f"RFC: {cotizacion.get('rfc') or '⚠️ no lo dejó — pídeselo antes de emitir'}\n"
         f"Notas del asesor: {cotizacion.get('notas') or '—'}\n\n"
         f"Entra al portal (vista Administrador) para subir el PDF de la "
         f"póliza emitida y notificar automáticamente al asesor.\n"
@@ -139,3 +144,27 @@ def notificar_asesor_poliza_emitida(cotizacion: dict, correo_asesor: str, ruta_p
         f"Paquete: {cotizacion['paquete']}\n"
     )
     return enviar_correo(correo_asesor, asunto, cuerpo, adjuntos=[ruta_poliza])
+
+
+def notificar_solicitud_manual(cotizacion: dict):
+    """El cliente pidió una suma asegurada mayor a los paquetes: no hay
+    prima automática, se le avisa al administrador para que un asesor
+    lo cotice manualmente."""
+    asunto = f"Solicitud de cotización manual — Folio {cotizacion['id']:05d}"
+    cuerpo = (
+        f"Hola,\n\nEl cliente {cotizacion['cliente_nombre']} pidió asegurar su "
+        f"inmueble con una suma mayor a la de los paquetes preestablecidos, así "
+        f"que necesita cotización manual.\n\n"
+        f"Folio: {cotizacion['id']:05d}\n"
+        f"Suma deseada: ${cotizacion['suma_deseada']:,.2f}\n"
+        f"Tipo: {'Propietario' if cotizacion['tipo_cliente'] == 'propietario' else 'Arrendatario'}\n"
+        f"Código postal: {cotizacion['codigo_postal']}\n\n"
+        f"Datos de contacto:\n"
+        f"  Nombre: {cotizacion['cliente_nombre']}\n"
+        f"  Nómina/Matrícula: {cotizacion.get('nomina') or '—'}\n"
+        f"  Correo: {cotizacion['cliente_correo']}\n"
+        f"  Teléfono: {cotizacion['cliente_telefono']}\n\n"
+        f"Por favor asigna un asesor para que le dé seguimiento y cotice este "
+        f"caso manualmente.\n"
+    )
+    return enviar_correo(ADMIN_EMAIL, asunto, cuerpo)

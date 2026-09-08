@@ -7,10 +7,19 @@ tres roles: **Cliente**, **Asesor comercial** y **Administrador** (tú).
 
 ## Flujo completo
 
-1. **Cliente**: llena el formulario (nombre, correo, teléfono, código
-   postal, paquete deseado) → el sistema calcula la prima con base en
-   el paquete y el código postal → genera un PDF de cotización
-   descargable.
+1. **Cliente**: llena un formulario de 3 secciones — (1) datos
+   personales, código postal y si es propietario o arrendatario; (2)
+   dirección y paquete de interés (Propietario, Arrendatario o
+   Estándar, o una suma personalizada mayor a los paquetes); (3) si
+   quiere agregar cobertura de Terremoto (cuando aplica). El sistema
+   calcula la prima real: prima base del paquete + zona de riesgo
+   hidrometeorológico (siempre) + zona sísmica (si pidió Terremoto),
+   prorrateada por los días que quedan hasta el fin de vigencia de la
+   póliza de flotilla, + 16% IVA + $1 de derecho de emisión. Genera un
+   PDF de cotización descargable con el desglose completo.
+   - Si el cliente pide una suma mayor a la de los paquetes, no se
+     calcula nada automático: se guarda su solicitud y se te notifica
+     para que un asesor lo cotice manualmente.
 2. El cliente indica si quiere contratar. Si dice que sí (y
    opcionalmente elige un asesor de preferencia), se le notifica por
    correo al asesor correspondiente con los datos del prospecto.
@@ -57,27 +66,30 @@ cp .env.example .env
   vista de Administrador) y `ADMIN_EMAIL` (a dónde te llegan los
   avisos de "asesor confirmó, listo para emitir").
 
-## Conectar tu Excel real de paquetes y códigos postales
+## Datos: paquetes, zonas y fecha de vigencia
 
-Ahora mismo la app usa datos de EJEMPLO (`data/paquetes_ejemplo.xlsx` y
-`data/codigos_postales_ejemplo.xlsx`) para que puedas ver todo el flujo
-funcionando. Cuando compartas tu Excel real:
+La app ya usa tus tarifas reales de Zurich:
 
-1. Reviso la estructura de tus columnas (paquetes por suma asegurada,
-   coberturas, y la tabla de primas/factores por código postal).
-2. Adapto `cotizador.py` para leer directamente tu archivo y tu forma
-   real de calcular la prima total (ahora mismo usa
-   `prima_base_del_paquete × factor_de_la_zona_del_CP`, pero si tu
-   lógica real es distinta —por ejemplo, una tabla de tarifas
-   específica por CP y suma asegurada— la ajusto para que calce
-   exactamente).
-3. Reemplazo los archivos de ejemplo por los reales (o apunto
-   `cotizador.py` a las rutas donde los coloques).
+- `data/paquetes.xlsx` — catálogo de paquetes (Propietario y
+  Arrendatario, cada uno con 4 niveles, y Estándar, que es un solo
+  paquete fijo), con todas las sumas aseguradas, la prima base anual y
+  los adicionales por zona de riesgo. Se generó a partir de tus archivos
+  `PAQUETES VIGENTES ZURICH.xlsx` (Propietario/Arrendatario) y
+  `Paq Solo contenidos.xlsx` (Estándar) con el script
+  `../excel_review/preparar_datos_reales.py` (fuera de esta carpeta) —
+  si Zurich actualiza tarifas, se vuelve a correr ese script con los
+  Excel nuevos.
+- `data/zonas_cp.xlsx` — un renglón por código postal con su zona de
+  riesgo hidrometeorológico y su zona sísmica, generado a partir de tu
+  archivo `Zonas Alfa y TEV por CP.xlsx`.
+- **Fecha de fin de vigencia**: no está en un archivo, se edita
+  directamente desde la vista de Administrador dentro de la app (cada
+  cotización se prorratea contra esa fecha). Actualízala cada vez que
+  renueve la póliza de flotilla, normalmente el 1 de enero.
 
-Igual para el catálogo de asesores: reemplaza
-`data/asesores_ejemplo.xlsx` por tu lista real (nombre, correo,
-usuario, contraseña) — dime los nombres/correos reales y te lo dejo
-armado.
+Para el catálogo de asesores: reemplaza `data/asesores_ejemplo.xlsx`
+por tu lista real (nombre, correo, usuario, contraseña) — dime los
+nombres/correos reales y te lo dejo armado.
 
 ## Ejecutar la app localmente
 
@@ -157,16 +169,21 @@ buena forma de verificar que todo sigue funcionando si haces cambios.
 ```
 seguro_hogar_app/
 ├── app.py                        # Interfaz Streamlit (3 vistas: Cliente/Asesor/Admin)
-├── cotizador.py                  # Cálculo de la prima (paquete + código postal)
-├── pdf_generator.py              # Genera el PDF de cotización
+├── cotizador.py                  # Cálculo real de la prima (paquete + zona + prorrateo)
+├── pdf_generator.py              # Genera el PDF de cotización con el desglose completo
 ├── email_utils.py                # Envío de correos + notificaciones del flujo
-├── db.py                         # Base de datos SQLite (historial y estatus)
+├── db.py                         # Base de datos SQLite (historial, estatus y configuración)
 ├── asesores.py                   # Catálogo de asesores y login simple
 ├── config.py                     # Lee credenciales de .env (local) o st.secrets (nube)
-├── generar_datos_ejemplo.py      # Crea paquetes/CPs de EJEMPLO
 ├── generar_asesores_ejemplo.py   # Crea asesores de EJEMPLO
 ├── test_flujo_completo.py        # Prueba end-to-end de toda la lógica
-├── data/                         # Excels de paquetes, CPs y asesores
+├── data/
+│   ├── paquetes.xlsx              # Catálogo real: Propietario/Arrendatario/Estándar
+│   ├── zonas_cp.xlsx              # Zona hidro + zona sísmica por código postal
+│   └── asesores_ejemplo.xlsx      # Catálogo de asesores (reemplazar por el real)
+├── assets/
+│   ├── logo_raspberry.png         # Logo del broker (aparece en la app y en el PDF)
+│   └── logo_zurich.png            # Logo de la aseguradora (aparece en la app y en el PDF)
 ├── pdfs_generados/                # PDFs de cotizaciones (se crea al usar la app)
 ├── polizas_emitidas/              # PDFs de pólizas subidas por el admin
 ├── correos_simulados/             # Correos "enviados" cuando no hay SMTP configurado
