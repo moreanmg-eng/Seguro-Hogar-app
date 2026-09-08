@@ -69,12 +69,26 @@ def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[st
                     f.read(), maintype="application", subtype="pdf", filename=p.name
                 )
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.send_message(msg)
-
-    return {"modo": "enviado", "destinatario": destinatario}
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        return {"modo": "enviado", "destinatario": destinatario}
+    except Exception as e:
+        # No se pudo enviar de verdad (credenciales inválidas, servidor
+        # incorrecto, etc.). En vez de tronar toda la app, guardamos el
+        # correo como respaldo simulado y devolvemos el error para que
+        # la interfaz pueda avisarle a la persona qué revisar.
+        marca = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ruta = SIMULADOS_DIR / f"FALLO_{marca}_{destinatario.replace('@', '_at_')}.txt"
+        with open(ruta, "w", encoding="utf-8") as f:
+            f.write(
+                f"⚠️ No se pudo enviar este correo de verdad. Revisa tu "
+                f"configuración de correo (SMTP_HOST/PORT/USER/PASSWORD).\n"
+                f"Error: {e}\n\nPara: {destinatario}\nAsunto: {asunto}\n\n{cuerpo}\n"
+            )
+        return {"modo": "error", "error": str(e), "ruta": str(ruta)}
 
 
 # ---------------------------------------------------------------------

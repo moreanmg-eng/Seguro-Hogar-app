@@ -30,6 +30,17 @@ ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD", "cambia-esta-clave")
 
 st.set_page_config(page_title="Cotizador de Seguro de Hogar", page_icon="🏠", layout="centered")
 
+def avisar_si_fallo_correo(resultado: dict | None):
+    """Muestra un aviso en pantalla si el envío de correo falló, sin
+    interrumpir el flujo (la cotización/estatus ya se guardó igual)."""
+    if resultado and resultado.get("modo") == "error":
+        st.warning(
+            "El registro se guardó correctamente, pero no se pudo enviar el "
+            f"correo de aviso. Revisa tu configuración de correo en Secrets. "
+            f"Detalle: {resultado.get('error')}"
+        )
+
+
 ESTATUS_LEGIBLE = {
     "cotizada": "Cotizada (sin decisión)",
     "interesado": "Interesado en contratar",
@@ -120,7 +131,8 @@ if vista == "Cliente":
                 nombre_para_correo = asesor_asignado or asesores_df.iloc[0]["nombre"]
                 correo_asesor = asesores_mod.correo_de(nombre_para_correo)
                 if correo_asesor:
-                    email_utils.notificar_asesor_nuevo_interesado(cot_actualizada, correo_asesor)
+                    r = email_utils.notificar_asesor_nuevo_interesado(cot_actualizada, correo_asesor)
+                    avisar_si_fallo_correo(r)
 
                 st.success("¡Gracias! Un asesor se pondrá en contacto contigo en breve.")
                 del st.session_state["ultima_cotizacion_id"]
@@ -180,7 +192,8 @@ elif vista == "Asesor":
             if st.button("✅ Confirmar listo para emisión", key=f"confirmar_{cot['id']}"):
                 db.confirmar_por_asesor(cot["id"], asesor["nombre"], notas)
                 cot_actualizada = db.obtener(cot["id"])
-                email_utils.notificar_admin_confirmacion_asesor(cot_actualizada, asesor["nombre"])
+                r = email_utils.notificar_admin_confirmacion_asesor(cot_actualizada, asesor["nombre"])
+                avisar_si_fallo_correo(r)
                 st.success("Confirmado. Se notificó al administrador para que emita la póliza.")
                 st.rerun()
 
@@ -244,7 +257,8 @@ elif vista == "Administrador":
                 cot_actualizada = db.obtener(cot["id"])
                 correo_asesor = asesores_mod.correo_de(cot["asesor_asignado"])
                 if correo_asesor:
-                    email_utils.notificar_asesor_poliza_emitida(cot_actualizada, correo_asesor, str(ruta_destino))
+                    r = email_utils.notificar_asesor_poliza_emitida(cot_actualizada, correo_asesor, str(ruta_destino))
+                    avisar_si_fallo_correo(r)
                 st.success("Póliza registrada y asesor notificado.")
                 st.rerun()
 
