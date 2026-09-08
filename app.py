@@ -515,6 +515,12 @@ elif vista == "Administrador":
             st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
             st.write(f"**Notas del asesor:** {cot['notas'] or '—'}")
             st.write(f"**Prima total:** ${cot['prima_total']:,.2f} MXN")
+            if cot.get("pdf_cotizacion_path") and Path(cot["pdf_cotizacion_path"]).exists():
+                with open(cot["pdf_cotizacion_path"], "rb") as f:
+                    st.download_button("📄 Descargar cotización", f, file_name=Path(cot["pdf_cotizacion_path"]).name,
+                                        key=f"cotizacion_{cot['id']}")
+            else:
+                st.caption("No hay PDF de cotización disponible (fue una solicitud manual o no se guardó el archivo).")
             archivo = st.file_uploader("Subir PDF de la póliza emitida", type="pdf", key=f"upload_{cot['id']}")
             if archivo and st.button("Confirmar emisión y notificar al asesor", key=f"emitir_{cot['id']}"):
                 ruta_destino = db.POLIZAS_DIR / f"poliza_{cot['id']:05d}.pdf"
