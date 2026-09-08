@@ -20,6 +20,10 @@ tres roles: **Cliente**, **Asesor comercial** y **Administrador** (tú).
    - Si el cliente pide una suma mayor a la de los paquetes, no se
      calcula nada automático: se guarda su solicitud y se te notifica
      para que un asesor lo cotice manualmente.
+   - Antes de poder dar clic en "Cotizar", el cliente debe marcar una
+     casilla de aceptación del Aviso de Privacidad (el texto vive en
+     `assets/aviso_privacidad.md` — puedes editarlo cuando quieras,
+     ver la sección "Aviso de privacidad" más abajo).
 2. El cliente indica si quiere contratar. Si dice que sí (y
    opcionalmente elige un asesor de preferencia), se le notifica por
    correo al asesor correspondiente con los datos del prospecto.
@@ -91,6 +95,18 @@ Para el catálogo de asesores: reemplaza `data/asesores_ejemplo.xlsx`
 por tu lista real (nombre, correo, usuario, contraseña) — dime los
 nombres/correos reales y te lo dejo armado.
 
+## Aviso de privacidad
+
+El texto que ve el cliente antes de cotizar vive en
+`assets/aviso_privacidad.md` — es un borrador general, **no es
+asesoría legal**, y conviene que lo revise tu asesor legal antes de
+usarlo con clientes reales (sobre todo el correo de contacto para
+derechos ARCO, que quedó como pendiente de definir). Para actualizarlo
+solo edita ese archivo de texto (puedes hacerlo directo en GitHub, con
+el ícono de lápiz) — no hace falta tocar nada de código, y el cliente
+no puede dar clic en "Cotizar" sin antes marcar la casilla de
+aceptación.
+
 ## Ejecutar la app localmente
 
 ```bash
@@ -134,10 +150,74 @@ Para que no pierdas información importante:
 - Cada notificación por correo ya lleva el PDF adjunto (cotización o
   póliza), así que aunque se perdiera el archivo local, ese correo
   sigue siendo un respaldo.
-- Más adelante, cuando el volumen de cotizaciones lo amerite, conviene
-  migrar la base de datos a algo permanente en la nube (por ejemplo,
-  Google Sheets o una base de datos gratuita tipo Supabase) en vez del
-  SQLite local — lo armamos cuando estés listo para ese paso.
+- La app también puede sincronizar sola cada cotización a una hoja de
+  Google Sheets en tiempo real, para no depender de acordarte de
+  descargar el Excel — ver la siguiente sección.
+
+## Respaldo automático en Google Sheets
+
+Con esto activado, cada vez que se cotiza algo o cambia de estatus
+(interesado, confirmado, emitida, entregada), la app sobrescribe una
+hoja de tu Google Sheet con el snapshot completo de todas las
+cotizaciones — automático, sin que nadie tenga que darle clic a nada.
+Es la forma recomendada de no perder información si la app corre en
+Streamlit Community Cloud.
+
+Mientras no lo configures, la app sigue funcionando exactamente igual
+(este respaldo es opcional) — el panel de Administrador simplemente te
+seguirá recordando usar el botón de descargar Excel.
+
+**Pasos para configurarlo (una sola vez):**
+
+1. **Crea la hoja de cálculo.** En [sheets.google.com](https://sheets.google.com)
+   crea una hoja nueva (puede estar vacía, o puedes usarla también para
+   ver los datos tú mismo). Cópiate el ID de la URL: es la parte entre
+   `/d/` y `/edit`, por ejemplo
+   `https://docs.google.com/spreadsheets/d/`**`1AbCdEfGhIjKlMnOpQr`**`/edit`.
+
+2. **Crea una "cuenta de servicio" en Google Cloud** (es una cuenta
+   especial solo para que la app pueda escribir en tu Sheet, no es tu
+   cuenta personal de Gmail):
+   - Entra a [console.cloud.google.com](https://console.cloud.google.com),
+     crea un proyecto nuevo (o usa uno que ya tengas).
+   - En el buscador de arriba escribe "Google Sheets API" y dale
+     **Habilitar** (Enable). Haz lo mismo para "Google Drive API".
+   - Ve a "APIs y servicios → Credenciales → Crear credenciales →
+     Cuenta de servicio". Dale cualquier nombre (p. ej.
+     "cotizador-backup") y termina el asistente sin agregarle roles
+     especiales.
+   - Ya creada, entra a esa cuenta de servicio → pestaña "Claves" →
+     "Agregar clave → Crear clave nueva" → tipo **JSON** → Crear. Se
+     descarga un archivo `.json` a tu computadora — esa es tu única
+     copia de la contraseña, guárdalo bien y no lo subas a GitHub.
+
+3. **Comparte tu Google Sheet con esa cuenta de servicio.** Abre el
+   archivo `.json` que descargaste y copia el valor del campo
+   `client_email` (se ve como
+   `algo@tu-proyecto.iam.gserviceaccount.com`). En tu Google Sheet dale
+   clic a "Compartir" y agrega ese correo como **Editor**. Si te
+   saltas este paso, la sincronización va a fallar con un error de
+   permisos.
+
+4. **Configura las credenciales en la app:**
+   - **En Streamlit Community Cloud:** entra a "Manage app → Settings
+     → Secrets" y agrega `GOOGLE_SHEET_ID` con el ID del paso 1, más
+     una tabla `[gcp_service_account]` con todos los campos del
+     `.json` que descargaste (mira la plantilla completa en
+     `.streamlit/secrets.toml.example` — solo copia cada valor de tu
+     `.json` al campo correspondiente).
+   - **En tu computadora (para probar local):** guarda el `.json`
+     descargado como `google_service_account.json` dentro de esta
+     misma carpeta (ya está en `.gitignore`, nunca se sube), y agrega
+     `GOOGLE_SHEET_ID=...` a tu archivo `.env`.
+
+5. Reinicia la app (o "Reboot app" en Streamlit Cloud). En el panel de
+   Administrador, en "Panel general de todas las cotizaciones", debe
+   aparecer "✅ Respaldo automático a Google Sheets activado" en vez
+   de la advertencia de almacenamiento — con un botón "🔄 Sincronizar
+   ahora" por si en algún momento quieres forzar una sincronización
+   manual (por ejemplo, la primera vez, para traer el historial que ya
+   tenías antes de activarlo).
 
 ## Probar todo el flujo sin usar la interfaz
 
@@ -183,7 +263,8 @@ seguro_hogar_app/
 │   └── asesores_ejemplo.xlsx      # Catálogo de asesores (reemplazar por el real)
 ├── assets/
 │   ├── logo_raspberry.png         # Logo del broker (aparece en la app y en el PDF)
-│   └── logo_zurich.png            # Logo de la aseguradora (aparece en la app y en el PDF)
+│   ├── logo_zurich.png            # Logo de la aseguradora (aparece en la app y en el PDF)
+│   └── aviso_privacidad.md        # Texto del Aviso de Privacidad (editable)
 ├── pdfs_generados/                # PDFs de cotizaciones (se crea al usar la app)
 ├── polizas_emitidas/              # PDFs de pólizas subidas por el admin
 ├── correos_simulados/             # Correos "enviados" cuando no hay SMTP configurado

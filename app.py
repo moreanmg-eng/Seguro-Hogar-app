@@ -24,6 +24,7 @@ import db
 import cotizador
 import pdf_generator
 import email_utils
+import sheets_backup
 import asesores as asesores_mod
 from config import get_secret
 
@@ -636,14 +637,28 @@ elif vista == "Administrador":
     st.divider()
     st.subheader("Panel general de todas las cotizaciones")
 
-    st.warning(
-        "⚠️ Si esta app está desplegada en Streamlit Community Cloud, el "
-        "almacenamiento **no está garantizado como permanente**: la "
-        "plataforma puede borrar los archivos locales (la base de datos y "
-        "los PDFs) en cualquier reinicio. Descarga un respaldo seguido, "
-        "sobre todo después de registrar contrataciones o emisiones "
-        "importantes."
-    )
+    if sheets_backup.configurado():
+        col_sync1, col_sync2 = st.columns([3, 1])
+        col_sync1.success(
+            "✅ Respaldo automático a Google Sheets activado: cada cotización "
+            "nueva o cambio de estatus se sincroniza solo."
+        )
+        if col_sync2.button("🔄 Sincronizar ahora"):
+            resultado_sync = sheets_backup.respaldar(db.listar())
+            if resultado_sync.get("modo") == "sincronizado":
+                st.success(f"Sincronizado: {resultado_sync['filas']} cotizaciones en Google Sheets.")
+            else:
+                st.error(f"No se pudo sincronizar: {resultado_sync.get('error')}")
+    else:
+        st.warning(
+            "⚠️ Si esta app está desplegada en Streamlit Community Cloud, el "
+            "almacenamiento **no está garantizado como permanente**: la "
+            "plataforma puede borrar los archivos locales (la base de datos y "
+            "los PDFs) en cualquier reinicio. Descarga un respaldo seguido, "
+            "sobre todo después de registrar contrataciones o emisiones "
+            "importantes, o configura el respaldo automático a Google Sheets "
+            "(ver README) para no depender de acordarte."
+        )
 
     todas = db.listar()
     if todas:

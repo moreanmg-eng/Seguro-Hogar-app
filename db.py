@@ -188,6 +188,18 @@ def set_fecha_fin_vigencia(fecha: date):
 # Cotizaciones
 # ---------------------------------------------------------------------
 
+def _respaldar_en_sheets():
+    """Empuja el snapshot completo de la tabla a Google Sheets (si está
+    configurado). Nunca lanza excepción -- si falla o no está
+    configurado, simplemente no pasa nada; la operación en SQLite ya
+    quedó guardada de todas formas."""
+    try:
+        import sheets_backup
+        sheets_backup.respaldar(listar())
+    except Exception:
+        pass
+
+
 def crear_cotizacion(**campos) -> int:
     """
     Crea una cotización. Pasa los campos como keyword arguments —
@@ -207,7 +219,9 @@ def crear_cotizacion(**campos) -> int:
             [campos[c] for c in columnas],
         )
         conn.commit()
-        return cur.lastrowid
+        nuevo_id = cur.lastrowid
+    _respaldar_en_sheets()
+    return nuevo_id
 
 
 def actualizar_cotizacion(cotizacion_id: int, **campos):
@@ -220,6 +234,7 @@ def actualizar_cotizacion(cotizacion_id: int, **campos):
             [*campos.values(), cotizacion_id],
         )
         conn.commit()
+    _respaldar_en_sheets()
 
 
 def marcar_interesado(cotizacion_id: int, asesor_asignado: str | None = None,
@@ -235,6 +250,7 @@ def marcar_interesado(cotizacion_id: int, asesor_asignado: str | None = None,
             WHERE id = ?
         """, (datetime.now().isoformat(timespec="seconds"), asesor_asignado, rfc, notas_cliente, cotizacion_id))
         conn.commit()
+    _respaldar_en_sheets()
 
 
 def confirmar_por_asesor(cotizacion_id: int, asesor_nombre: str, notas: str = ""):
@@ -248,6 +264,7 @@ def confirmar_por_asesor(cotizacion_id: int, asesor_nombre: str, notas: str = ""
             WHERE id = ?
         """, (datetime.now().isoformat(timespec="seconds"), asesor_nombre, notas, cotizacion_id))
         conn.commit()
+    _respaldar_en_sheets()
 
 
 def registrar_emision(cotizacion_id: int, poliza_pdf_path: str):
@@ -260,6 +277,7 @@ def registrar_emision(cotizacion_id: int, poliza_pdf_path: str):
             WHERE id = ?
         """, (datetime.now().isoformat(timespec="seconds"), poliza_pdf_path, cotizacion_id))
         conn.commit()
+    _respaldar_en_sheets()
 
 
 def marcar_entregada(cotizacion_id: int):
@@ -270,6 +288,7 @@ def marcar_entregada(cotizacion_id: int):
             WHERE id = ?
         """, (datetime.now().isoformat(timespec="seconds"), cotizacion_id))
         conn.commit()
+    _respaldar_en_sheets()
 
 
 def obtener(cotizacion_id: int) -> dict | None:
