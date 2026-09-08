@@ -1,0 +1,8 @@
+.env
+.streamlit/secrets.toml
+cotizaciones.db
+pdfs_generados/
+polizas_emitidas/
+correos_simulados/
+__pycache__/
+*.pyc
