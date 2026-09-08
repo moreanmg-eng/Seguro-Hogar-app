@@ -162,6 +162,18 @@ if vista == "Cliente":
     numero_int = dc3.text_input("Número int.", key="c_num_int")
     colonia = dc4.text_input("Colonia *", key="c_colonia")
 
+    with st.expander("📊 Comparar paquetes disponibles"):
+        st.caption(
+            "Suma asegurada de cada cobertura por paquete (MXN). La prima "
+            "final también depende de tu código postal y de si agregas "
+            "Terremoto; esto es solo para comparar coberturas."
+        )
+        tabla_comparativa = cotizador.tabla_comparativa(tipo_cliente)
+        st.dataframe(
+            tabla_comparativa.style.format("${:,.0f}"),
+            use_container_width=True,
+        )
+
     opciones = cotizador.paquetes_disponibles(tipo_cliente)
     OPCION_PERSONALIZADA = "Deseo asegurar con una suma mayor a la de los paquetes"
     etiquetas = [o["etiqueta"] for o in opciones] + [OPCION_PERSONALIZADA]
@@ -274,11 +286,22 @@ if vista == "Cliente":
                 )
                 ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id)
                 db.actualizar_cotizacion(cot_id, pdf_cotizacion_path=ruta_pdf)
+                cot_recien_creada = db.obtener(cot_id)
+                r_cliente = email_utils.notificar_cliente_cotizacion(cot_recien_creada, ruta_pdf)
 
                 st.session_state["ultima_cotizacion_id"] = cot_id
                 st.success(f"¡Cotización lista! Folio {cot_id:05d}")
                 st.metric("Prima total a pagar", f"${resultado['prima_total']:,.2f} MXN",
                           help=f"Prorrateada por {resultado['dias_restantes']} días restantes de vigencia")
+
+                if r_cliente.get("modo") == "error":
+                    st.warning(
+                        "Tu cotización se generó correctamente, pero no pudimos "
+                        f"enviártela por correo automáticamente. Descárgala aquí abajo. "
+                        f"Detalle: {r_cliente.get('error')}"
+                    )
+                else:
+                    st.caption(f"📧 También te enviamos esta cotización a {correo}.")
 
                 with open(ruta_pdf, "rb") as f:
                     st.download_button("📄 Descargar cotización en PDF", f,
@@ -502,6 +525,70 @@ elif vista == "Administrador":
         db.set_fecha_fin_vigencia(nueva_fecha)
         st.success(f"Actualizada a {nueva_fecha.strftime('%d/%m/%Y')}. Las cotizaciones nuevas usarán esta fecha.")
         st.rerun()
+
+    st.divider()
+    st.subheader("📊 Panel de métricas")
+
+    todas_metricas = db.listar()
+    if not todas_metricas:
+        st.info("Aún no hay cotizaciones registradas para mostrar métricas.")
+    else:
+        import pandas as pd
+
+        df_m = pd.DataFrame(todas_metricas)
+        conteo_estatus = df_m["estatus"].value_counts()
+
+        total_cotizaciones = len(df_m)
+        n_interesados = int(conteo_estatus.get("interesado", 0))
+        n_confirmados = int(conteo_estatus.get("confirmado_por_asesor", 0))
+        n_emitidas = int(conteo_estatus.get("emitida", 0))
+        n_entregadas = int(conteo_estatus.get("entregada", 0))
+        n_polizas = n_emitidas + n_entregadas
+        n_manuales = int(conteo_estatus.get("solicitud_manual", 0))
+
+        # "En pipeline de contratación" = llegó a interesarse en contratar,
+        # sin importar en qué paso del proceso vaya ahora.
+        en_pipeline = n_interesados + n_confirmados + n_polizas
+        tasa_conversion = (en_pipeline / total_cotizaciones * 100) if total_cotizaciones else 0
+        prima_total_emitida = df_m.loc[df_m["estatus"].isin(["emitida", "entregada"]), "prima_total"].fillna(0).sum()
+
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("Cotizaciones totales", total_cotizaciones)
+        col_m2.metric("Quisieron contratar", en_pipeline, help="Pasaron a 'interesado' o más adelante")
+        col_m3.metric("Pólizas emitidas", n_polizas)
+        col_m4.metric("Tasa de conversión", f"{tasa_conversion:.0f}%", help="Cotizaciones que llegaron a 'interesado' o más adelante")
+
+        col_m5, col_m6 = st.columns(2)
+        col_m5.metric("Prima total emitida", f"${prima_total_emitida:,.2f} MXN")
+        col_m6.metric("Solicitudes manuales (suma mayor)", n_manuales)
+
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            st.caption("Cotizaciones por estatus")
+            conteo_legible = conteo_estatus.rename(index=ESTATUS_LEGIBLE)
+            st.bar_chart(conteo_legible)
+        with col_g2:
+            if df_m["paquete"].notna().any():
+                st.caption("Cotizaciones por paquete")
+                st.bar_chart(df_m["paquete"].value_counts())
+            else:
+                st.caption("Aún no hay cotizaciones con paquete automático.")
+
+        if df_m["asesor_asignado"].notna().any():
+            st.caption("Casos por asesor (todos los estatus)")
+            df_m["_es_poliza"] = df_m["estatus"].isin(["emitida", "entregada"])
+            df_m["_prima_emitida"] = df_m["prima_total"].where(df_m["_es_poliza"], 0).fillna(0)
+            resumen_asesor = (
+                df_m.dropna(subset=["asesor_asignado"])
+                .groupby("asesor_asignado")
+                .agg(
+                    casos=("id", "count"),
+                    emitidas=("_es_poliza", "sum"),
+                    prima_total_emitida=("_prima_emitida", "sum"),
+                )
+                .sort_values("casos", ascending=False)
+            )
+            st.dataframe(resumen_asesor, use_container_width=True)
 
     st.divider()
     st.subheader("Confirmados por asesor, pendientes de emitir")

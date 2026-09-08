@@ -14,8 +14,8 @@ login real, etc.).
 import pandas as pd
 
 asesores = pd.DataFrame([
-    {"nombre": "Ana Torres",   "correo": "ana.torres@ejemplo.com",   "usuario": "ana",   "password": "cambia-esto-1"},
-    {"nombre": "Luis Ramírez", "correo": "luis.ramirez@ejemplo.com", "usuario": "luis",  "password": "cambia-esto-2"},
+    {"nombre": "Fernando Muñoz", "correo": "fernando.munoz@raspberry.mx", "usuario": "fernando", "password": "cambia-esto-1"},
+    {"nombre": "Martín Morales", "correo": "martin.morales@raspberry.mx", "usuario": "martin",   "password": "cambia-esto-2"},
 ])
 
 asesores.to_excel("data/asesores_ejemplo.xlsx", index=False)

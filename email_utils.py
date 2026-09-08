@@ -146,6 +146,38 @@ def notificar_asesor_poliza_emitida(cotizacion: dict, correo_asesor: str, ruta_p
     return enviar_correo(correo_asesor, asunto, cuerpo, adjuntos=[ruta_poliza])
 
 
+_NOMBRE_TIPO_PAQUETE = {
+    "propietario": "Propietario",
+    "arrendatario": "Arrendatario",
+    "estandar": "Estándar",
+}
+
+
+def notificar_cliente_cotizacion(cotizacion: dict, ruta_pdf: str | None):
+    """Envía al propio cliente el PDF de su cotización recién generada,
+    de forma automática, en cuanto la calcula (sin que tenga que
+    pedirlo). No aplica a solicitudes manuales, que no tienen PDF."""
+    asunto = f"Tu cotización de Seguro de Hogar — Folio {cotizacion['id']:05d}"
+    tipo_legible = _NOMBRE_TIPO_PAQUETE.get(cotizacion.get("tipo_paquete"), cotizacion.get("tipo_paquete") or "—")
+    cuerpo = (
+        f"Hola {cotizacion['cliente_nombre']},\n\n"
+        f"Gracias por cotizar tu Seguro de Hogar. Adjunto va el PDF con el "
+        f"detalle completo de tu cotización, para que lo tengas a la mano.\n\n"
+        f"Folio: {cotizacion['id']:05d}\n"
+        f"Paquete: {cotizacion.get('paquete')} ({tipo_legible})\n"
+        f"Prima total a pagar: ${cotizacion['prima_total']:,.2f} MXN\n"
+        f"Días de vigencia restantes: {cotizacion.get('dias_restantes')}\n\n"
+        f"Si quieres contratar esta póliza o tienes dudas, puedes regresar al "
+        f"portal donde la generaste y decirnos que sí quieres contratar, o "
+        f"simplemente responder este correo y un asesor te contacta.\n\n"
+        f"Saludos."
+    )
+    return enviar_correo(
+        cotizacion["cliente_correo"], asunto, cuerpo,
+        adjuntos=[ruta_pdf] if ruta_pdf else [],
+    )
+
+
 def notificar_solicitud_manual(cotizacion: dict):
     """El cliente pidió una suma asegurada mayor a los paquetes: no hay
     prima automática, se le avisa al administrador para que un asesor

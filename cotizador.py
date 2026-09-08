@@ -42,6 +42,28 @@ NOMBRES_ZONA_HIDRO = {
     "alfa3": "Alfa 3",
 }
 
+# Etiquetas legibles de cada columna de suma asegurada del catálogo,
+# usadas para armar la tabla comparativa de paquetes que ve el cliente
+# antes de elegir. El orden del diccionario define el orden de los
+# renglones en la tabla.
+COBERTURAS_LABELS = {
+    "prima_base_anual": "Prima base anual (sin zona de riesgo)",
+    "suma_edificio_incendio": "Edificio — Incendio y aliados",
+    "suma_contenidos_incendio": "Contenidos — Incendio y aliados",
+    "suma_edificio_remocion_escombros": "Edificio — Remoción de escombros",
+    "suma_contenidos_remocion_escombros": "Contenidos — Remoción de escombros",
+    "suma_edificio_gastos_extra": "Edificio — Gastos extra",
+    "suma_contenidos_gastos_extra": "Contenidos — Gastos extra",
+    "suma_cristales": "Cristales",
+    "suma_equipo_electronico": "Equipo electrónico",
+    "suma_equipo_electronico_movil": "Equipo electrónico móvil",
+    "suma_robo_menaje": "Robo de menaje",
+    "suma_robo_transito": "Robo en tránsito",
+    "suma_rc_privada_familiar": "Responsabilidad Civil privada familiar",
+    "suma_rc_arrendatario": "Responsabilidad Civil arrendatario",
+    "suma_mascotas": "Mascotas",
+}
+
 
 def cargar_paquetes() -> pd.DataFrame:
     return pd.read_excel(RUTA_PAQUETES)
@@ -79,6 +101,27 @@ def paquetes_disponibles(tipo_cliente: str) -> list[dict]:
         opciones.append({"tipo_paquete": "estandar", "paquete": fila["paquete"], "etiqueta": etiqueta})
 
     return opciones
+
+
+def tabla_comparativa(tipo_cliente: str) -> pd.DataFrame:
+    """
+    Tabla comparativa (coberturas en renglones, paquetes en columnas)
+    para que el cliente pueda comparar sus opciones antes de elegir.
+    Siempre incluye el paquete Estándar además de los propios del tipo
+    de cliente. Oculta renglones que sean $0 en todos los paquetes
+    mostrados (p. ej. las sumas de edificio para un arrendatario).
+    """
+    df = cargar_paquetes()
+    propios = df[df["tipo"] == tipo_cliente].copy()
+    estandar = df[df["tipo"] == "estandar"].copy()
+    combinado = pd.concat([propios, estandar], ignore_index=True)
+
+    columnas_coberturas = [c for c in COBERTURAS_LABELS if combinado[c].fillna(0).sum() > 0]
+
+    tabla = combinado.set_index("paquete")[columnas_coberturas].T
+    tabla.index = [COBERTURAS_LABELS[c] for c in tabla.index]
+    tabla.index.name = "Cobertura"
+    return tabla
 
 
 def buscar_zona(codigo_postal: str) -> dict | None:
