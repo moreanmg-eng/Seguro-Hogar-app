@@ -1,0 +1,18 @@
+Asunto: Tu cotización de Seguro de Hogar — Folio $folio
+
+Estimado/a $cliente_nombre,
+
+Gracias por cotizar su Seguro de Hogar con Raspberry. Estamos adjuntando el PDF con el detalle completo de su cotización, para que pueda revisarla y tenerla disponible por este medio.
+
+Folio: $folio
+Paquete: $paquete
+Prima total a pagar: $prima_total
+Días de vigencia restantes: $dias_restantes
+
+Si desea contratar esta póliza o tiene dudas, puede ponerse en contacto con un asesor comercial o incluso regresar al portal donde se generó la cotización e ingresar el número de folio para confirmar la contratación.
+
+Saludos.
+
+Raspberry | Hogar
+
+Nota: Por favor, no responda a este mensaje. Este buzón de correo es exclusivamente de envío automatizado y no se encuentra habilitado para recibir respuestas.

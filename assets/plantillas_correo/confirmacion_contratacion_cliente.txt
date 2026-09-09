@@ -1,0 +1,13 @@
+Asunto: Confirmación de contratación — Folio $folio
+
+Estimado/a $cliente_nombre,
+
+Gracias por confirmar la contratación de su póliza de hogar con folio $folio; un asesor le compartirá su póliza en las próximas 24 horas, junto con las instrucciones de pago y con la información relevante acerca de su póliza y los datos de la aseguradora.
+
+Gracias por su preferencia.
+
+Saludos.
+
+Raspberry | Hogar
+
+Nota: Por favor, no responda a este mensaje. Este buzón de correo es exclusivamente de envío automatizado y no se encuentra habilitado para recibir respuestas.

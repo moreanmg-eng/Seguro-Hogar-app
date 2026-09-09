@@ -1,0 +1,20 @@
+Asunto: Solicitud de contacto — Folio $folio
+
+Estimado/a $asesor_nombre,
+
+Te notificamos que una persona desea recibir asesoría y más información acerca del Seguro de Hogar.
+
+Te compartimos los datos:
+
+Folio: $folio
+Nombre: $cliente_nombre
+Correo: $cliente_correo
+Teléfono: $cliente_telefono
+
+Solicitamos de tu apoyo para que sea contactado a la brevedad y que pueda obtener la información necesaria para continuar con su contratación.
+
+Saludos.
+
+Raspberry | Hogar
+
+Nota: Por favor, no responda a este mensaje. Este buzón de correo es exclusivamente de envío automatizado y no se encuentra habilitado para recibir respuestas.

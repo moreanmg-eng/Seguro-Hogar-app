@@ -1,0 +1,19 @@
+Asunto: Tu póliza de Seguro de Hogar está lista — Folio $folio
+
+Estimado/a $cliente_nombre,
+
+Le compartimos la póliza de Hogar que se emitió con Zurich, la cual ya cuenta con cobertura y protección a partir de este momento.
+
+A continuación, la información de pago de su póliza:
+
+$info_pago
+
+Se adjuntan también un par de infográficos con información relevante acerca de las asistencias con las que cuenta su póliza y los datos de contacto de la aseguradora.
+
+Gracias por tu preferencia.
+
+Saludos.
+
+Raspberry | Hogar
+
+Nota: Por favor, no responda a este mensaje. Este buzón de correo es exclusivamente de envío automatizado y no se encuentra habilitado para recibir respuestas.
