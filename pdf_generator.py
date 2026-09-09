@@ -27,7 +27,7 @@ subtitulo_style = ParagraphStyle("Subtitulo", parent=styles["Heading2"], textCol
 TIPO_PAQUETE_LEGIBLE = {
     "propietario": "Propietario (inmueble + contenidos)",
     "arrendatario": "Arrendatario (solo contenidos)",
-    "estandar": "Estándar (solo contenidos, sin fenómenos naturales)",
+    "estandar": "Solo Contenidos (sin fenómenos naturales)",
 }
 
 
@@ -62,16 +62,21 @@ def _logo_encabezado():
     return t
 
 
-def generar_pdf_cotizacion(datos_cliente: dict, cotizacion: dict, cotizacion_id: int) -> str:
+def generar_pdf_cotizacion(datos_cliente: dict, cotizacion: dict, cotizacion_id: int,
+                            folio: str | None = None) -> str:
     """
     datos_cliente: nombre, nomina, correo, telefono, tipo_cliente,
                    calle, numero_ext, numero_int, colonia,
                    es_para_otro, beneficiario_nombre, beneficiario_relacion
     cotizacion: dict como el que regresa cotizador.calcular_prima()
+    folio: el folio público (p.ej. "F193854") que se le muestra al
+           cliente; si no se manda, se usa el id interno como respaldo
+           (solo para no romper llamadas viejas).
     Regresa la ruta del PDF generado.
     """
     nombre_archivo = f"cotizacion_{cotizacion_id:05d}.pdf"
     ruta = SALIDA_DIR / nombre_archivo
+    folio_mostrado = folio or f"{cotizacion_id:05d}"
 
     doc = SimpleDocTemplate(str(ruta), pagesize=letter,
                              topMargin=1.6 * cm, bottomMargin=1.6 * cm)
@@ -81,7 +86,7 @@ def generar_pdf_cotizacion(datos_cliente: dict, cotizacion: dict, cotizacion_id:
     elementos.append(Spacer(1, 0.4 * cm))
     elementos.append(Paragraph("Cotización de Seguro de Hogar", titulo_style))
     elementos.append(Paragraph(
-        f"Folio: {cotizacion_id:05d} &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"Folio: {folio_mostrado} &nbsp;&nbsp;|&nbsp;&nbsp; "
         f"Fecha de cotización: {cotizacion['fecha_cotizacion'].strftime('%d/%m/%Y')} "
         f"&nbsp;&nbsp;|&nbsp;&nbsp; Vigente hasta: {cotizacion['fecha_fin_vigencia'].strftime('%d/%m/%Y')}",
         styles["Normal"]

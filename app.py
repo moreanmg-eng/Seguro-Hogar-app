@@ -92,7 +92,37 @@ if email_utils.MODO_SIMULADO:
 # =======================================================================
 if vista == "Cliente":
     st.title("🏠 Cotiza tu Seguro de Hogar")
-    asesores_df = asesores_mod.cargar_asesores()
+
+    with st.expander("🔎 ¿Ya cotizaste? Recupera tu cotización"):
+        st.caption(
+            "Si ya cotizaste pero no terminaste de decidir, ingresa tu folio "
+            "y el correo con el que cotizaste para continuar donde te "
+            f"quedaste. Disponible hasta {db.DIAS_VIGENCIA_RECUPERACION} días "
+            "naturales después de haber cotizado."
+        )
+        col_rec1, col_rec2 = st.columns(2)
+        folio_recuperar = col_rec1.text_input("Folio (ej. F193854)", key="c_folio_recuperar")
+        correo_recuperar = col_rec2.text_input("Correo con el que cotizaste", key="c_correo_recuperar")
+        if st.button("Buscar mi cotización", key="c_buscar_folio"):
+            cot_encontrada = db.buscar_por_folio_y_correo(folio_recuperar, correo_recuperar)
+            if not cot_encontrada:
+                st.error(
+                    "No encontramos ninguna cotización con ese folio y ese correo. "
+                    "Verifica que estén bien escritos."
+                )
+            else:
+                dias_transcurridos = (datetime.now() - datetime.fromisoformat(cot_encontrada["fecha_creacion"])).days
+                if dias_transcurridos > db.DIAS_VIGENCIA_RECUPERACION:
+                    st.error("Hemos detectado que tu cotización ya expiró. Te invitamos a generar una nueva.")
+                elif cot_encontrada["estatus"] != "cotizada":
+                    st.info(
+                        "Esta cotización ya está en proceso — un asesor ya tiene tus "
+                        "datos y se pondrá en contacto contigo, no es necesario volver "
+                        "a decidir nada."
+                    )
+                else:
+                    st.session_state["ultima_cotizacion_id"] = cot_encontrada["id"]
+                    st.success("¡Listo! Encontramos tu cotización — continúa aquí abajo. 👇")
 
     st.subheader("1. Tus datos")
     col1, col2 = st.columns(2)
@@ -162,6 +192,17 @@ if vista == "Cliente":
     numero_ext = dc2.text_input("Número ext. *", key="c_num_ext")
     numero_int = dc3.text_input("Número int.", key="c_num_int")
     colonia = dc4.text_input("Colonia *", key="c_colonia")
+
+    with st.expander("📦 Paq Nuevo - Solo Contenidos"):
+        st.caption(
+            "Coberturas y montos del paquete Solo Contenidos (no incluye "
+            "edificio ni fenómenos naturales)."
+        )
+        tabla_solo_contenidos = cotizador.tabla_paquete_solo_contenidos()
+        st.dataframe(
+            tabla_solo_contenidos.style.format("${:,.0f}"),
+            use_container_width=True,
+        )
 
     with st.expander("📊 Comparar paquetes disponibles"):
         st.caption(
@@ -245,8 +286,9 @@ if vista == "Cliente":
                 es_solicitud_manual=1, suma_deseada=suma_deseada,
             )
             cot = db.obtener(cot_id)
-            r = email_utils.notificar_solicitud_manual(cot)
-            avisar_si_fallo_correo(r)
+            # Por ahora solo se envían 3 correos automáticos (cotización al
+            # cliente, entrega de póliza, y solicitud de contacto de asesor);
+            # este aviso al administrador queda deshabilitado a propósito.
             st.success(
                 "¡Gracias! Tu información ya fue recabada. Un asesor se pondrá "
                 "en contacto contigo pronto para cotizar tu caso."
@@ -278,6 +320,7 @@ if vista == "Cliente":
                     prima_neta_prorateada=resultado["prima_neta_prorateada"], iva=resultado["iva"],
                     derecho_emision=resultado["derecho_emision"], prima_total=resultado["prima_total"],
                 )
+                folio_creado = db.obtener(cot_id)["folio"]
                 datos_cliente = dict(
                     nombre=nombre, nomina=nomina, forma_pago=forma_pago, correo=correo, telefono=telefono,
                     tipo_cliente=tipo_cliente, calle=calle, numero_ext=numero_ext,
@@ -285,13 +328,13 @@ if vista == "Cliente":
                     beneficiario_nombre=beneficiario_nombre, beneficiario_relacion=beneficiario_relacion,
                     municipio=resultado["municipio"], estado=resultado["estado"],
                 )
-                ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id)
+                ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id, folio_creado)
                 db.actualizar_cotizacion(cot_id, pdf_cotizacion_path=ruta_pdf)
                 cot_recien_creada = db.obtener(cot_id)
                 r_cliente = email_utils.notificar_cliente_cotizacion(cot_recien_creada, ruta_pdf)
 
                 st.session_state["ultima_cotizacion_id"] = cot_id
-                st.success(f"¡Cotización lista! Folio {cot_id:05d}")
+                st.success(f"¡Cotización lista! Folio {folio_creado}")
                 st.metric("Prima total a pagar", f"${resultado['prima_total']:,.2f} MXN",
                           help=f"Prorrateada por {resultado['dias_restantes']} días restantes de vigencia")
 
@@ -315,6 +358,11 @@ if vista == "Cliente":
         cot = db.obtener(cot_id)
         if cot and cot["estatus"] == "cotizada":
             st.subheader("¿Deseas contratar esta póliza?")
+            st.caption(
+                f"Folio {cot.get('folio') or cot['id']} — {cot.get('paquete') or 'Suma personalizada'} — "
+                f"Prima total: ${cot['prima_total']:,.2f} MXN" if cot.get("prima_total")
+                else f"Folio {cot.get('folio') or cot['id']}"
+            )
             opcion_decision = st.radio(
                 "¿Qué te gustaría hacer?",
                 [
@@ -324,9 +372,10 @@ if vista == "Cliente":
                 ],
                 key="c_decision",
             )
+            asesores_disponibles = asesores_mod.asesores_para_publico(cot.get("nomina"))
             asesor_pref = st.selectbox(
                 "Asesor de preferencia (opcional)",
-                ["Cualquiera disponible"] + asesores_df["nombre"].tolist(),
+                ["Cualquiera disponible"] + asesores_disponibles["nombre"].tolist(),
                 key="asesor_pref",
             )
 
@@ -350,11 +399,10 @@ if vista == "Cliente":
                     )
                     cot_actualizada = db.obtener(cot_id)
 
-                    nombre_para_correo = asesor_asignado or asesores_df.iloc[0]["nombre"]
+                    nombre_para_correo = asesor_asignado or asesores_disponibles.iloc[0]["nombre"]
                     correo_asesor = asesores_mod.correo_de(nombre_para_correo)
-                    if correo_asesor:
-                        r = email_utils.notificar_asesor_nuevo_interesado(cot_actualizada, correo_asesor)
-                        avisar_si_fallo_correo(r)
+                    r = email_utils.notificar_cliente_confirmacion_contratacion(cot_actualizada, correo_asesor)
+                    avisar_si_fallo_correo(r)
 
                     st.success("¡Gracias! Un asesor se pondrá en contacto contigo en breve.")
                     del st.session_state["ultima_cotizacion_id"]
@@ -372,10 +420,12 @@ if vista == "Cliente":
                     )
                     cot_actualizada = db.obtener(cot_id)
 
-                    nombre_para_correo = asesor_asignado or asesores_df.iloc[0]["nombre"]
+                    nombre_para_correo = asesor_asignado or asesores_disponibles.iloc[0]["nombre"]
                     correo_asesor = asesores_mod.correo_de(nombre_para_correo)
                     if correo_asesor:
-                        r = email_utils.notificar_asesor_nuevo_interesado(cot_actualizada, correo_asesor)
+                        r = email_utils.notificar_asesor_nuevo_interesado(
+                            cot_actualizada, correo_asesor, asesor_nombre=nombre_para_correo,
+                        )
                         avisar_si_fallo_correo(r)
 
                     st.success("¡Gracias! Un asesor se pondrá en contacto contigo en breve.")
@@ -420,11 +470,12 @@ elif vista == "Asesor":
     interesados = [
         c for c in db.listar(estatus="interesado")
         if c["asesor_asignado"] in (None, "", asesor["nombre"])
+        and asesores_mod.asesor_atiende_nomina(asesor, c.get("nomina"))
     ]
     if not interesados:
         st.info("No tienes prospectos pendientes por ahora.")
     for cot in interesados:
-        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
+        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
             st.write(f"**Correo:** {cot['cliente_correo']}")
             st.write(f"**Teléfono:** {cot['cliente_telefono']}")
             st.write(f"**RFC:** {cot.get('rfc') or '— (no lo dejó)'}")
@@ -441,10 +492,10 @@ elif vista == "Asesor":
             notas = st.text_area("Notas para el administrador (opcional)", key=f"notas_{cot['id']}")
             if st.button("✅ Confirmar listo para emisión", key=f"confirmar_{cot['id']}"):
                 db.confirmar_por_asesor(cot["id"], asesor["nombre"], notas)
-                cot_actualizada = db.obtener(cot["id"])
-                r = email_utils.notificar_admin_confirmacion_asesor(cot_actualizada, asesor["nombre"])
-                avisar_si_fallo_correo(r)
-                st.success("Confirmado. Se notificó al administrador para que emita la póliza.")
+                # Por ahora solo se envían 3 correos automáticos (cotización al
+                # cliente, entrega de póliza, y solicitud de contacto de asesor);
+                # este aviso al administrador queda deshabilitado a propósito.
+                st.success("Confirmado. El administrador podrá verlo en su panel para emitir la póliza.")
                 st.rerun()
 
     st.divider()
@@ -452,11 +503,12 @@ elif vista == "Asesor":
     manuales = [
         c for c in db.listar(estatus="solicitud_manual")
         if c["asesor_asignado"] in (None, "", asesor["nombre"])
+        and asesores_mod.asesor_atiende_nomina(asesor, c.get("nomina"))
     ]
     if not manuales:
         st.info("No hay solicitudes manuales pendientes por ahora.")
     for cot in manuales:
-        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — suma deseada ${cot['suma_deseada']:,.0f}"):
+        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — suma deseada ${cot['suma_deseada']:,.0f}"):
             st.write(f"**Correo:** {cot['cliente_correo']}")
             st.write(f"**Teléfono:** {cot['cliente_telefono']}")
             st.write(f"**Nómina/Matrícula:** {cot.get('nomina') or '—'}")
@@ -476,14 +528,27 @@ elif vista == "Asesor":
     if not emitidas:
         st.info("No tienes pólizas emitidas pendientes de entregar.")
     for cot in emitidas:
-        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']}"):
+        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']}"):
             if cot["poliza_pdf_path"] and Path(cot["poliza_pdf_path"]).exists():
                 with open(cot["poliza_pdf_path"], "rb") as f:
                     st.download_button("📄 Descargar póliza", f, file_name=Path(cot["poliza_pdf_path"]).name,
                                         key=f"poliza_{cot['id']}")
             if st.button("Marcar como entregada al cliente", key=f"entregada_{cot['id']}"):
                 db.marcar_entregada(cot["id"])
-                st.success("Marcada como entregada.")
+                if cot.get("poliza_pdf_path") and Path(cot["poliza_pdf_path"]).exists():
+                    r_entrega = email_utils.notificar_cliente_poliza_entregada(
+                        cot, cot["poliza_pdf_path"], asesor["nombre"], correo_asesor=asesor.get("correo"),
+                    )
+                    avisar_si_fallo_correo(r_entrega)
+                    if r_entrega.get("modo") != "error":
+                        st.success("Marcada como entregada. Le mandamos la póliza y las indicaciones al cliente (con copia a ti).")
+                    else:
+                        st.success("Marcada como entregada.")
+                else:
+                    st.warning(
+                        "Marcada como entregada, pero no encontré el PDF de la póliza para "
+                        "mandárselo por correo al cliente — compártesela manualmente."
+                    )
                 st.rerun()
 
 # =======================================================================
@@ -597,7 +662,7 @@ elif vista == "Administrador":
     if not pendientes:
         st.info("No hay pólizas pendientes de emitir por ahora.")
     for cot in pendientes:
-        with st.expander(f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
+        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
             st.write(f"**Asesor:** {cot['asesor_asignado']}")
             st.write(f"**RFC:** {cot.get('rfc') or '⚠️ no lo dejó — pídeselo antes de emitir'}")
             st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
@@ -615,12 +680,11 @@ elif vista == "Administrador":
                 with open(ruta_destino, "wb") as f:
                     f.write(archivo.read())
                 db.registrar_emision(cot["id"], str(ruta_destino))
-                cot_actualizada = db.obtener(cot["id"])
-                correo_asesor = asesores_mod.correo_de(cot["asesor_asignado"])
-                if correo_asesor:
-                    r = email_utils.notificar_asesor_poliza_emitida(cot_actualizada, correo_asesor, str(ruta_destino))
-                    avisar_si_fallo_correo(r)
-                st.success("Póliza registrada y asesor notificado.")
+                # Por ahora solo se envían 3 correos automáticos (cotización al
+                # cliente, entrega de póliza, y solicitud de contacto de asesor);
+                # este aviso al asesor queda deshabilitado a propósito — lo verá
+                # en su panel, en "Pólizas emitidas, listas para compartir".
+                st.success("Póliza registrada. El asesor la verá en su panel para entregarla al cliente.")
                 st.rerun()
 
     st.divider()
@@ -630,7 +694,7 @@ elif vista == "Administrador":
         st.info("No hay solicitudes manuales pendientes.")
     for cot in manuales:
         st.write(
-            f"Folio {cot['id']:05d} — {cot['cliente_nombre']} — suma deseada "
+            f"Folio {cot['folio']} — {cot['cliente_nombre']} — suma deseada "
             f"${cot['suma_deseada']:,.0f} — asesor: {cot['asesor_asignado'] or 'sin asignar'}"
         )
 

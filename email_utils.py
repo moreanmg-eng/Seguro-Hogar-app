@@ -22,12 +22,22 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 from datetime import datetime
+from string import Template
 
 from config import get_secret
 
 BASE_DIR = Path(__file__).parent
 SIMULADOS_DIR = BASE_DIR / "correos_simulados"
 SIMULADOS_DIR.mkdir(exist_ok=True)
+
+PLANTILLAS_DIR = BASE_DIR / "assets" / "plantillas_correo"
+
+# Infográficos que siempre se adjuntan al correo de entrega de póliza,
+# junto con el PDF de la póliza misma.
+ADJUNTOS_ENTREGA_POLIZA = [
+    BASE_DIR / "assets" / "cuponera_asistencias_hogar.pdf",
+    BASE_DIR / "assets" / "guia_asegurado_hogar.pdf",
+]
 
 SMTP_HOST = get_secret("SMTP_HOST")
 SMTP_PORT = int(get_secret("SMTP_PORT", "587"))
@@ -39,10 +49,15 @@ ADMIN_EMAIL = get_secret("ADMIN_EMAIL", "morean.mg@gmail.com")
 MODO_SIMULADO = not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD])
 
 
-def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[str] | None = None):
+def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[str] | None = None,
+                   copia_a: str | None = None):
     """
     Envía un correo. Si no hay credenciales SMTP configuradas, lo
     simula guardándolo como .txt en correos_simulados/ y no falla.
+
+    copia_a: correo opcional que recibe copia (CC) del mismo mensaje —
+    por ejemplo, mandarle al asesor una copia de lo que se le envió al
+    cliente, como respaldo de que se entregó.
     """
     adjuntos = adjuntos or []
 
@@ -50,7 +65,10 @@ def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[st
         marca = datetime.now().strftime("%Y%m%d_%H%M%S")
         ruta = SIMULADOS_DIR / f"{marca}_{destinatario.replace('@', '_at_')}.txt"
         with open(ruta, "w", encoding="utf-8") as f:
-            f.write(f"Para: {destinatario}\nAsunto: {asunto}\n\n{cuerpo}\n")
+            f.write(f"Para: {destinatario}\n")
+            if copia_a:
+                f.write(f"Cc: {copia_a}\n")
+            f.write(f"Asunto: {asunto}\n\n{cuerpo}\n")
             if adjuntos:
                 f.write(f"\nAdjuntos (rutas locales): {adjuntos}\n")
         return {"modo": "simulado", "ruta": str(ruta)}
@@ -58,6 +76,8 @@ def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[st
     msg = EmailMessage()
     msg["From"] = FROM_EMAIL
     msg["To"] = destinatario
+    if copia_a:
+        msg["Cc"] = copia_a
     msg["Subject"] = asunto
     msg.set_content(cuerpo)
 
@@ -91,86 +111,154 @@ def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[st
         return {"modo": "error", "error": str(e), "ruta": str(ruta)}
 
 
+def _cargar_plantilla(nombre_archivo: str, **valores) -> tuple[str, str]:
+    """
+    Lee una plantilla de correo editable desde
+    assets/plantillas_correo/<nombre_archivo> y le rellena los
+    marcadores tipo $nombre_variable con los valores que le pases.
+
+    Para editar la redacción de cualquier correo automático, edita
+    directamente el archivo de texto correspondiente (por ejemplo
+    desde GitHub, con el ícono de lápiz) — no hace falta tocar nada de
+    código. La primera línea del archivo debe empezar con "Asunto: " y
+    el resto (después de una línea en blanco) es el cuerpo del correo.
+    Si te falta algún marcador o le pones uno que no existe, no truena
+    — simplemente se queda tal cual escrito.
+    """
+    contenido = (PLANTILLAS_DIR / nombre_archivo).read_text(encoding="utf-8")
+    primera_linea, _, resto = contenido.partition("\n")
+    asunto_crudo = primera_linea.removeprefix("Asunto:").strip()
+    cuerpo_crudo = resto.lstrip("\n")
+    asunto = Template(asunto_crudo).safe_substitute(**valores)
+    cuerpo = Template(cuerpo_crudo).safe_substitute(**valores)
+    return asunto, cuerpo
+
+
 # ---------------------------------------------------------------------
 # Notificaciones específicas del flujo de negocio
 # ---------------------------------------------------------------------
 
-def notificar_asesor_nuevo_interesado(cotizacion: dict, correo_asesor: str):
-    asunto = f"Nuevo prospecto interesado en contratar — Folio {cotizacion['id']:05d}"
-    cuerpo = (
-        f"Hola,\n\nEl cliente {cotizacion['cliente_nombre']} indicó que quiere "
-        f"contratar el seguro de hogar que cotizó.\n\n"
-        f"Motivo: {cotizacion.get('notas_cliente') or '—'}\n"
-        f"Folio: {cotizacion['id']:05d}\n"
-        f"Paquete: {cotizacion['paquete']} ({cotizacion['tipo_paquete']})\n"
-        f"Prima total: ${cotizacion['prima_total']:,.2f} MXN\n"
-        f"Código postal: {cotizacion['codigo_postal']}\n"
-        f"Forma de pago deseada: {cotizacion.get('forma_pago') or '—'}\n"
-        f"RFC: {cotizacion.get('rfc') or '— (no lo dejó, pídeselo antes de que se emita)'}\n\n"
-        f"Datos de contacto del cliente:\n"
-        f"  Correo: {cotizacion['cliente_correo']}\n"
-        f"  Teléfono: {cotizacion['cliente_telefono']}\n\n"
-        f"Por favor da seguimiento para confirmar la contratación. Cuando el "
-        f"cliente esté listo, entra al portal (vista Asesor) y confirma la "
-        f"emisión para que se le notifique al administrador.\n"
+_NOMBRE_TIPO_PAQUETE = {
+    "propietario": "Propietario",
+    "arrendatario": "Arrendatario",
+    "estandar": "Solo Contenidos",
+}
+
+
+def notificar_asesor_nuevo_interesado(cotizacion: dict, correo_asesor: str, asesor_nombre: str = ""):
+    """Se dispara cuando el cliente elige 'Quiero que un asesor me
+    contacte para más información' — le llega solo al asesor, con la
+    cotización en PDF adjunta."""
+    asunto, cuerpo = _cargar_plantilla(
+        "nuevo_interesado.txt",
+        asesor_nombre=asesor_nombre or "asesor",
+        cliente_nombre=cotizacion["cliente_nombre"],
+        motivo=cotizacion.get("notas_cliente") or "—",
+        folio=cotizacion.get("folio") or f"{cotizacion['id']:05d}",
+        paquete=cotizacion.get("paquete") or "—",
+        tipo_paquete=cotizacion.get("tipo_paquete") or "—",
+        prima_total=f"${cotizacion['prima_total']:,.2f} MXN" if cotizacion.get("prima_total") else "—",
+        codigo_postal=cotizacion["codigo_postal"],
+        forma_pago=cotizacion.get("forma_pago") or "—",
+        rfc=cotizacion.get("rfc") or "— (no lo dejó, pídeselo antes de que se emita)",
+        cliente_correo=cotizacion["cliente_correo"],
+        cliente_telefono=cotizacion["cliente_telefono"],
     )
     return enviar_correo(correo_asesor, asunto, cuerpo, adjuntos=[cotizacion.get("pdf_cotizacion_path")] if cotizacion.get("pdf_cotizacion_path") else [])
 
 
+def notificar_cliente_confirmacion_contratacion(cotizacion: dict, correo_asesor: str | None = None):
+    """Se dispara cuando el cliente elige 'Sí, quiero contratar' — le
+    llega al propio cliente confirmando que se recibió su solicitud,
+    con copia (CC) al asesor asignado para que también quede
+    enterado."""
+    asunto, cuerpo = _cargar_plantilla(
+        "confirmacion_contratacion_cliente.txt",
+        cliente_nombre=cotizacion["cliente_nombre"],
+        folio=cotizacion.get("folio") or f"{cotizacion['id']:05d}",
+    )
+    return enviar_correo(
+        cotizacion["cliente_correo"], asunto, cuerpo, copia_a=correo_asesor,
+    )
+
+
 def notificar_admin_confirmacion_asesor(cotizacion: dict, asesor_nombre: str):
-    asunto = f"Listo para emitir — Folio {cotizacion['id']:05d} (confirmó {asesor_nombre})"
-    cuerpo = (
-        f"Hola,\n\n{asesor_nombre} confirmó que el cliente "
-        f"{cotizacion['cliente_nombre']} está listo para que emitas la póliza.\n\n"
-        f"Folio: {cotizacion['id']:05d}\n"
-        f"Paquete: {cotizacion['paquete']} ({cotizacion['tipo_paquete']})\n"
-        f"Prima total: ${cotizacion['prima_total']:,.2f} MXN\n"
-        f"Forma de pago deseada: {cotizacion.get('forma_pago') or '—'}\n"
-        f"RFC: {cotizacion.get('rfc') or '⚠️ no lo dejó — pídeselo antes de emitir'}\n"
-        f"Notas del asesor: {cotizacion.get('notas') or '—'}\n\n"
-        f"Entra al portal (vista Administrador) para subir el PDF de la "
-        f"póliza emitida y notificar automáticamente al asesor.\n"
+    asunto, cuerpo = _cargar_plantilla(
+        "confirmacion_asesor.txt",
+        asesor_nombre=asesor_nombre,
+        cliente_nombre=cotizacion["cliente_nombre"],
+        folio=cotizacion.get("folio") or f"{cotizacion['id']:05d}",
+        paquete=cotizacion["paquete"],
+        tipo_paquete=cotizacion["tipo_paquete"],
+        prima_total=f"${cotizacion['prima_total']:,.2f} MXN",
+        forma_pago=cotizacion.get("forma_pago") or "—",
+        rfc=cotizacion.get("rfc") or "⚠️ no lo dejó — pídeselo antes de emitir",
+        notas=cotizacion.get("notas") or "—",
     )
     return enviar_correo(ADMIN_EMAIL, asunto, cuerpo)
 
 
 def notificar_asesor_poliza_emitida(cotizacion: dict, correo_asesor: str, ruta_poliza: str):
-    asunto = f"Póliza emitida y lista para compartir — Folio {cotizacion['id']:05d}"
-    cuerpo = (
-        f"Hola,\n\nLa póliza del cliente {cotizacion['cliente_nombre']} ya fue "
-        f"emitida. Descárgala del portal (vista Asesor) y compártela con el "
-        f"cliente.\n\n"
-        f"Folio: {cotizacion['id']:05d}\n"
-        f"Paquete: {cotizacion['paquete']}\n"
+    asunto, cuerpo = _cargar_plantilla(
+        "poliza_emitida.txt",
+        cliente_nombre=cotizacion["cliente_nombre"],
+        folio=cotizacion.get("folio") or f"{cotizacion['id']:05d}",
+        paquete=cotizacion["paquete"],
     )
     return enviar_correo(correo_asesor, asunto, cuerpo, adjuntos=[ruta_poliza])
 
 
-_NOMBRE_TIPO_PAQUETE = {
-    "propietario": "Propietario",
-    "arrendatario": "Arrendatario",
-    "estandar": "Estándar",
-}
+def notificar_cliente_poliza_entregada(cotizacion: dict, ruta_poliza: str, asesor_nombre: str,
+                                        correo_asesor: str | None = None):
+    """
+    Se dispara cuando el asesor da clic en "Marcar como entregada al
+    cliente": le manda al cliente su póliza en PDF, junto con la
+    cuponera de asistencias y la guía del asegurado, y le manda una
+    copia (CC) al propio asesor como respaldo de que ya se la
+    entregó.
+
+    El cuerpo del correo vive en
+    assets/plantillas_correo/poliza_entregada_cliente.txt — edítalo
+    cuando quieras cambiar la redacción, no hace falta tocar código.
+
+    $info_pago: por ahora se rellena con un texto genérico, mientras
+    se conecta la liga de pago / monto de descuento por nómina
+    (pendiente de implementar). En cuanto esa función esté lista, se
+    calculará aquí según la forma de pago del cliente.
+    """
+    info_pago = cotizacion.get("info_pago") or (
+        "Un asesor se pondrá en contacto contigo con las instrucciones "
+        "de pago correspondientes a tu forma de pago."
+    )
+
+    asunto, cuerpo = _cargar_plantilla(
+        "poliza_entregada_cliente.txt",
+        cliente_nombre=cotizacion["cliente_nombre"],
+        folio=cotizacion.get("folio") or f"{cotizacion['id']:05d}",
+        paquete=cotizacion.get("paquete") or "—",
+        asesor_nombre=asesor_nombre,
+        info_pago=info_pago,
+    )
+    adjuntos = [ruta_poliza] + [str(p) for p in ADJUNTOS_ENTREGA_POLIZA if p.exists()]
+    return enviar_correo(
+        cotizacion["cliente_correo"], asunto, cuerpo,
+        adjuntos=adjuntos, copia_a=correo_asesor,
+    )
 
 
 def notificar_cliente_cotizacion(cotizacion: dict, ruta_pdf: str | None):
     """Envía al propio cliente el PDF de su cotización recién generada,
     de forma automática, en cuanto la calcula (sin que tenga que
     pedirlo). No aplica a solicitudes manuales, que no tienen PDF."""
-    asunto = f"Tu cotización de Seguro de Hogar — Folio {cotizacion['id']:05d}"
     tipo_legible = _NOMBRE_TIPO_PAQUETE.get(cotizacion.get("tipo_paquete"), cotizacion.get("tipo_paquete") or "—")
-    cuerpo = (
-        f"Hola {cotizacion['cliente_nombre']},\n\n"
-        f"Gracias por cotizar tu Seguro de Hogar. Adjunto va el PDF con el "
-        f"detalle completo de tu cotización, para que lo tengas a la mano.\n\n"
-        f"Folio: {cotizacion['id']:05d}\n"
-        f"Paquete: {cotizacion.get('paquete')} ({tipo_legible})\n"
-        f"Prima total a pagar: ${cotizacion['prima_total']:,.2f} MXN\n"
-        f"Días de vigencia restantes: {cotizacion.get('dias_restantes')}\n\n"
-        f"Si quieres contratar esta póliza o tienes dudas, puedes regresar al "
-        f"portal donde la generaste y decirnos que sí quieres contratar, o "
-        f"simplemente responder este correo y un asesor te contacta.\n\n"
-        f"Saludos."
+    asunto, cuerpo = _cargar_plantilla(
+        "cotizacion_cliente.txt",
+        cliente_nombre=cotizacion["cliente_nombre"],
+        folio=cotizacion.get("folio") or f"{cotizacion['id']:05d}",
+        paquete=cotizacion.get("paquete"),
+        tipo_paquete=tipo_legible,
+        prima_total=f"${cotizacion['prima_total']:,.2f} MXN",
+        dias_restantes=cotizacion.get("dias_restantes"),
     )
     return enviar_correo(
         cotizacion["cliente_correo"], asunto, cuerpo,
@@ -182,21 +270,15 @@ def notificar_solicitud_manual(cotizacion: dict):
     """El cliente pidió una suma asegurada mayor a los paquetes: no hay
     prima automática, se le avisa al administrador para que un asesor
     lo cotice manualmente."""
-    asunto = f"Solicitud de cotización manual — Folio {cotizacion['id']:05d}"
-    cuerpo = (
-        f"Hola,\n\nEl cliente {cotizacion['cliente_nombre']} pidió asegurar su "
-        f"inmueble con una suma mayor a la de los paquetes preestablecidos, así "
-        f"que necesita cotización manual.\n\n"
-        f"Folio: {cotizacion['id']:05d}\n"
-        f"Suma deseada: ${cotizacion['suma_deseada']:,.2f}\n"
-        f"Tipo: {'Propietario' if cotizacion['tipo_cliente'] == 'propietario' else 'Arrendatario'}\n"
-        f"Código postal: {cotizacion['codigo_postal']}\n\n"
-        f"Datos de contacto:\n"
-        f"  Nombre: {cotizacion['cliente_nombre']}\n"
-        f"  Nómina/Matrícula: {cotizacion.get('nomina') or '—'}\n"
-        f"  Correo: {cotizacion['cliente_correo']}\n"
-        f"  Teléfono: {cotizacion['cliente_telefono']}\n\n"
-        f"Por favor asigna un asesor para que le dé seguimiento y cotice este "
-        f"caso manualmente.\n"
+    asunto, cuerpo = _cargar_plantilla(
+        "solicitud_manual.txt",
+        cliente_nombre=cotizacion["cliente_nombre"],
+        folio=cotizacion.get("folio") or f"{cotizacion['id']:05d}",
+        suma_deseada=f"${cotizacion['suma_deseada']:,.2f}",
+        tipo_cliente="Propietario" if cotizacion["tipo_cliente"] == "propietario" else "Arrendatario",
+        codigo_postal=cotizacion["codigo_postal"],
+        nomina=cotizacion.get("nomina") or "—",
+        cliente_correo=cotizacion["cliente_correo"],
+        cliente_telefono=cotizacion["cliente_telefono"],
     )
     return enviar_correo(ADMIN_EMAIL, asunto, cuerpo)

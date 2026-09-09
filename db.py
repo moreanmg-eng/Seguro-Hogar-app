@@ -27,9 +27,10 @@ editable desde la vista de Administrador).
 cotizaciones.db se crea automáticamente en la primera ejecución.
 """
 
+import random
 import sqlite3
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 BASE_DIR = Path(__file__).parent
 # Nombre de archivo "v2" a propósito: el esquema de la tabla cambió
@@ -47,12 +48,35 @@ def _conn():
     return conn
 
 
+# Días naturales que un folio sigue siendo válido para que el cliente
+# pueda "recuperar" su cotización y retomar la decisión de contratar.
+DIAS_VIGENCIA_RECUPERACION = 5
+
+
+def _generar_folio(conn) -> str:
+    """
+    Genera un folio público de la forma 'F123456' (6 dígitos al azar,
+    NO consecutivo) a propósito: a diferencia del id interno de la
+    base de datos, este folio es el que ve y comparte el cliente, así
+    que no debe ser adivinable en secuencia (F1, F2, F3...) para que
+    nadie pueda ver los datos de otro cliente solo probando números.
+    """
+    while True:
+        candidato = f"F{random.randint(100000, 999999)}"
+        existe = conn.execute(
+            "SELECT 1 FROM cotizaciones WHERE folio = ?", (candidato,)
+        ).fetchone()
+        if not existe:
+            return candidato
+
+
 def init_db():
     with _conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS cotizaciones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 fecha_creacion TEXT NOT NULL,
+                folio TEXT,                          -- identificador público no consecutivo, p.ej. "F193854"
 
                 -- Sección 1 del formulario
                 cliente_nombre TEXT NOT NULL,
@@ -132,6 +156,7 @@ _COLUMNAS_NUEVAS = {
     "forma_pago": "TEXT",
     "municipio": "TEXT",
     "estado_inmueble": "TEXT",
+    "folio": "TEXT",
 }
 
 
@@ -140,6 +165,18 @@ def _migrar_columnas_faltantes(conn):
     for columna, tipo in _COLUMNAS_NUEVAS.items():
         if columna not in columnas_actuales:
             conn.execute(f"ALTER TABLE cotizaciones ADD COLUMN {columna} {tipo}")
+
+    # Si la columna "folio" se acaba de agregar (o hay filas viejas sin
+    # folio, de antes de que existiera esta función), les generamos uno
+    # para que también se puedan identificar de forma consistente.
+    filas_sin_folio = conn.execute(
+        "SELECT id FROM cotizaciones WHERE folio IS NULL OR folio = ''"
+    ).fetchall()
+    for fila in filas_sin_folio:
+        conn.execute(
+            "UPDATE cotizaciones SET folio = ? WHERE id = ?",
+            (_generar_folio(conn), fila["id"]),
+        )
 
 
 # ---------------------------------------------------------------------
@@ -214,6 +251,10 @@ def crear_cotizacion(**campos) -> int:
     columnas = list(campos.keys())
     placeholders = ", ".join("?" for _ in columnas)
     with _conn() as conn:
+        if "folio" not in campos:
+            campos["folio"] = _generar_folio(conn)
+            columnas = list(campos.keys())
+            placeholders = ", ".join("?" for _ in columnas)
         cur = conn.execute(
             f"INSERT INTO cotizaciones ({', '.join(columnas)}) VALUES ({placeholders})",
             [campos[c] for c in columnas],
@@ -294,6 +335,28 @@ def marcar_entregada(cotizacion_id: int):
 def obtener(cotizacion_id: int) -> dict | None:
     with _conn() as conn:
         fila = conn.execute("SELECT * FROM cotizaciones WHERE id = ?", (cotizacion_id,)).fetchone()
+        return dict(fila) if fila else None
+
+
+def buscar_por_folio_y_correo(folio: str, correo: str) -> dict | None:
+    """
+    Para la opción "Recuperar cotización" del cliente: solo regresa la
+    cotización si el folio Y el correo coinciden con lo que se guardó
+    al cotizar (evita que alguien vea los datos de otro cliente solo
+    adivinando o probando folios). No filtra por vigencia ni estatus
+    -- eso se revisa en la pantalla que llama a esta función, para
+    poder mostrar el mensaje correcto en cada caso (expirada, ya en
+    proceso, etc.).
+    """
+    folio = (folio or "").strip().upper()
+    correo = (correo or "").strip().lower()
+    if not folio or not correo:
+        return None
+    with _conn() as conn:
+        fila = conn.execute(
+            "SELECT * FROM cotizaciones WHERE folio = ? AND LOWER(cliente_correo) = ?",
+            (folio, correo),
+        ).fetchone()
         return dict(fila) if fila else None
 
 

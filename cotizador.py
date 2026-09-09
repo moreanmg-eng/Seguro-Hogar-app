@@ -5,7 +5,7 @@ Cómo se calcula la prima total (confirmado con el equipo):
 
   1. Del código postal se obtiene la zona de Fenómeno Hidrometeorológico
      (siempre aplica) y la zona de Terremoto (solo si el cliente la
-     quiere incluir). El paquete "Estándar" nunca usa ninguna de las
+     quiere incluir). El paquete "Solo Contenidos" nunca usa ninguna de las
      dos zonas — no cubre fenómenos naturales.
   2. prima_anual_total = prima_base_anual del paquete
                         + adicional de zona Hidro (si aplica)
@@ -18,7 +18,7 @@ Cómo se calcula la prima total (confirmado con el equipo):
   6. prima_total = prima_neta_prorateada + 16% IVA + $1 de derecho de emisión
 
 Los datos vienen de:
-  - data/paquetes.xlsx   -> catálogo de paquetes (Propietario/Arrendatario/Estándar)
+  - data/paquetes.xlsx   -> catálogo de paquetes (Propietario/Arrendatario/Solo Contenidos)
   - data/zonas_cp.xlsx   -> zona hidro y zona terremoto por código postal
 """
 
@@ -45,9 +45,10 @@ NOMBRES_ZONA_HIDRO = {
 # Etiquetas legibles de cada columna de suma asegurada del catálogo,
 # usadas para armar la tabla comparativa de paquetes que ve el cliente
 # antes de elegir. El orden del diccionario define el orden de los
-# renglones en la tabla.
+# renglones en la tabla. (La prima base anual NO se incluye aquí a
+# propósito: es un dato interno que puede confundir al cliente, así
+# que no se muestra en ninguna tabla comparativa.)
 COBERTURAS_LABELS = {
-    "prima_base_anual": "Prima base anual (sin zona de riesgo)",
     "suma_edificio_incendio": "Edificio — Incendio y aliados",
     "suma_contenidos_incendio": "Contenidos — Incendio y aliados",
     "suma_edificio_remocion_escombros": "Edificio — Remoción de escombros",
@@ -79,7 +80,7 @@ def paquetes_disponibles(tipo_cliente: str) -> list[dict]:
     """
     tipo_cliente: 'propietario' | 'arrendatario'
     Regresa las opciones de paquete que se le deben mostrar en el
-    formulario (los suyos + siempre la opción Estándar), con una
+    formulario (los suyos + siempre la opción Solo Contenidos), con una
     etiqueta lista para mostrar en el selector.
     """
     df = cargar_paquetes()
@@ -97,7 +98,7 @@ def paquetes_disponibles(tipo_cliente: str) -> list[dict]:
         opciones.append({"tipo_paquete": tipo_cliente, "paquete": fila["paquete"], "etiqueta": etiqueta})
 
     for _, fila in estandar.iterrows():
-        etiqueta = f"{fila['paquete']} (solo contenidos ${fila['suma_contenidos_incendio']:,.0f}, sin fenómenos naturales)"
+        etiqueta = f"{fila['paquete']} (contenidos ${fila['suma_contenidos_incendio']:,.0f}, sin fenómenos naturales)"
         opciones.append({"tipo_paquete": "estandar", "paquete": fila["paquete"], "etiqueta": etiqueta})
 
     return opciones
@@ -106,19 +107,38 @@ def paquetes_disponibles(tipo_cliente: str) -> list[dict]:
 def tabla_comparativa(tipo_cliente: str) -> pd.DataFrame:
     """
     Tabla comparativa (coberturas en renglones, paquetes en columnas)
-    para que el cliente pueda comparar sus opciones antes de elegir.
-    Siempre incluye el paquete Estándar además de los propios del tipo
-    de cliente. Oculta renglones que sean $0 en todos los paquetes
-    mostrados (p. ej. las sumas de edificio para un arrendatario).
+    para que el cliente pueda comparar sus opciones antes de elegir,
+    solo con los paquetes propios de su tipo de cliente (Propietario o
+    Arrendatario). El paquete "Solo Contenidos" (antes "Estándar") ya
+    no se incluye aquí — tiene su propia tabla, ver
+    tabla_paquete_solo_contenidos(). Oculta renglones que sean $0 en
+    todos los paquetes mostrados (p. ej. las sumas de edificio para un
+    arrendatario).
     """
     df = cargar_paquetes()
-    propios = df[df["tipo"] == tipo_cliente].copy()
-    estandar = df[df["tipo"] == "estandar"].copy()
-    combinado = pd.concat([propios, estandar], ignore_index=True)
+    combinado = df[df["tipo"] == tipo_cliente].copy()
 
     columnas_coberturas = [c for c in COBERTURAS_LABELS if combinado[c].fillna(0).sum() > 0]
 
     tabla = combinado.set_index("paquete")[columnas_coberturas].T
+    tabla.index = [COBERTURAS_LABELS[c] for c in tabla.index]
+    tabla.index.name = "Cobertura"
+    return tabla
+
+
+def tabla_paquete_solo_contenidos() -> pd.DataFrame:
+    """
+    Tabla con únicamente las coberturas y montos del paquete "Solo
+    Contenidos" (tipo interno 'estandar'), para mostrarse por separado
+    del comparativo de Propietario/Arrendatario. Oculta coberturas en
+    $0 (por ejemplo, las de edificio, que este paquete no cubre).
+    """
+    df = cargar_paquetes()
+    fila = df[df["tipo"] == "estandar"]
+
+    columnas_coberturas = [c for c in COBERTURAS_LABELS if fila[c].fillna(0).sum() > 0]
+
+    tabla = fila.set_index("paquete")[columnas_coberturas].T
     tabla.index = [COBERTURAS_LABELS[c] for c in tabla.index]
     tabla.index.name = "Cobertura"
     return tabla
@@ -158,7 +178,7 @@ def calcular_prima(tipo_paquete: str, paquete_nombre: str, codigo_postal: str,
 
     # El municipio/estado son solo informativos (para mostrarlos en la
     # cotización) y se buscan siempre, sin importar el paquete — el
-    # paquete Estándar no necesita la zona de riesgo, pero igual
+    # paquete Solo Contenidos no necesita la zona de riesgo, pero igual
     # queremos mostrar dónde está el inmueble si el CP existe en el
     # catálogo.
     zona = buscar_zona(codigo_postal)
@@ -222,7 +242,7 @@ def calcular_prima(tipo_paquete: str, paquete_nombre: str, codigo_postal: str,
         "suma_rc_arrendatario": paquete["suma_rc_arrendatario"],
         "suma_mascotas": paquete["suma_mascotas"],
         "zona_hidro_key": zona_hidro_key,
-        "zona_hidro_nombre": NOMBRES_ZONA_HIDRO.get(zona_hidro_key, "—") if tipo_paquete != "estandar" else "No aplica (paquete Estándar)",
+        "zona_hidro_nombre": NOMBRES_ZONA_HIDRO.get(zona_hidro_key, "—") if tipo_paquete != "estandar" else "No aplica (paquete Solo Contenidos)",
         "zona_tev_num": zona_tev_num,
         "incluye_terremoto": incluye_terremoto and tipo_paquete != "estandar",
         "prima_base_anual": prima_base,

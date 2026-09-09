@@ -42,16 +42,29 @@ cot_id = db.crear_cotizacion(
     prima_neta_prorateada=resultado["prima_neta_prorateada"], iva=resultado["iva"],
     derecho_emision=resultado["derecho_emision"], prima_total=resultado["prima_total"],
 )
+cot_creada = db.obtener(cot_id)
+folio = cot_creada["folio"]
+assert folio and folio.startswith("F") and len(folio) == 7 and folio[1:].isdigit(), \
+    f"El folio debe verse como 'F123456', no como {folio!r}"
+print("   Folio generado (no consecutivo):", folio)
+
 datos_cliente = dict(
     nombre="Juan Pérez", nomina="EMP-001", correo="juan@example.com", telefono="5512345678",
     tipo_cliente="propietario", calle="Av. Reforma", numero_ext="123", numero_int="4",
     colonia="Centro", es_para_otro=False, beneficiario_nombre="", beneficiario_relacion="",
     municipio=resultado["municipio"], estado=resultado["estado"],
 )
-ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id)
+ruta_pdf = pdf_generator.generar_pdf_cotizacion(datos_cliente, resultado, cot_id, folio)
 db.actualizar_cotizacion(cot_id, pdf_cotizacion_path=ruta_pdf)
 assert os.path.exists(ruta_pdf)
 print("   PDF generado en:", ruta_pdf)
+
+print("\n1.1) Recuperar cotización por folio + correo (nueva función de seguridad)...")
+encontrada = db.buscar_por_folio_y_correo(folio, "JUAN@example.com")  # mayúsculas no deben importar
+assert encontrada and encontrada["id"] == cot_id
+assert db.buscar_por_folio_y_correo(folio, "otro@example.com") is None, "Correo incorrecto no debe regresar nada"
+assert db.buscar_por_folio_y_correo("F000000", "juan@example.com") is None, "Folio incorrecto no debe regresar nada"
+print("   OK: solo se encuentra con folio Y correo correctos.")
 
 print("\n2) Cliente decide contratar, deja su RFC y elige asesor...")
 asesores_df = asesores_mod.cargar_asesores()
@@ -86,13 +99,13 @@ cot = db.obtener(cot_id)
 assert cot["estatus"] == "entregada"
 print("   Estatus final:", cot["estatus"])
 
-print("\n6) Cliente arrendatario cotiza paquete Estándar (sin zona, CP inventado válido)...")
-resultado_std = cotizador.calcular_prima("estandar", "Estándar", "20000", False, fin_vigencia)
+print("\n6) Cliente arrendatario cotiza paquete Solo Contenidos (sin zona, CP inventado válido)...")
+resultado_std = cotizador.calcular_prima("estandar", "Solo Contenidos", "20000", False, fin_vigencia)
 assert resultado_std["hidro_adder"] == 0 and resultado_std["tev_adder"] == 0
 assert round(resultado_std["prima_base_anual"], 2) == 534.24
-assert resultado_std["municipio"] and resultado_std["estado"], "Estándar también debería traer municipio/estado"
-print("   Prima total Estándar:", round(resultado_std["prima_total"], 2))
-print("   Municipio/Estado (Estándar):", resultado_std["municipio"], "-", resultado_std["estado"])
+assert resultado_std["municipio"] and resultado_std["estado"], "Solo Contenidos también debería traer municipio/estado"
+print("   Prima total Solo Contenidos:", round(resultado_std["prima_total"], 2))
+print("   Municipio/Estado (Solo Contenidos):", resultado_std["municipio"], "-", resultado_std["estado"])
 
 print("\n7) Cliente pide suma personalizada (solicitud manual, sin PDF)...")
 cot_id_manual = db.crear_cotizacion(
@@ -114,8 +127,8 @@ try:
 except ValueError as e:
     print("   OK, error esperado:", e)
 
-print("\n9) CP fuera de catálogo con paquete Estándar NO debe fallar (no necesita zona)...")
-resultado_std_sin_cp = cotizador.calcular_prima("estandar", "Estándar", "99999", False, fin_vigencia)
+print("\n9) CP fuera de catálogo con paquete Solo Contenidos NO debe fallar (no necesita zona)...")
+resultado_std_sin_cp = cotizador.calcular_prima("estandar", "Solo Contenidos", "99999", False, fin_vigencia)
 assert resultado_std_sin_cp["municipio"] is None and resultado_std_sin_cp["estado"] is None
 assert resultado_std_sin_cp["prima_total"] > 0
 print("   OK, cotiza sin problema y sin municipio/estado (CP desconocido).")
