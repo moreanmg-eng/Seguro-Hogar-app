@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from datetime import datetime, date
 import streamlit as st
+import streamlit.components.v1 as components
 
 import db
 import cotizador
@@ -171,7 +172,12 @@ if vista == "Cliente":
                     )
                 else:
                     st.session_state["ultima_cotizacion_id"] = cot_encontrada["id"]
-                    st.success("¡Listo! Encontramos tu cotización — continúa aquí abajo. 👇")
+                    # Al recuperar, el cliente no llena el formulario de arriba
+                    # de nuevo -- su decisión ya está lista más abajo en la
+                    # página, así que la desplazamos hasta ahí automáticamente
+                    # para que no se confunda con el formulario vacío.
+                    st.session_state["_desplazar_a_decision"] = True
+                    st.success("¡Listo! Encontramos tu cotización — te llevamos ahí abajo. 👇")
 
     st.subheader("1. Tus datos")
     col1, col2 = st.columns(2)
@@ -406,6 +412,19 @@ if vista == "Cliente":
         cot_id = st.session_state["ultima_cotizacion_id"]
         cot = db.obtener(cot_id)
         if cot and cot["estatus"] == "cotizada":
+            st.markdown('<div id="paso-decision"></div>', unsafe_allow_html=True)
+            if st.session_state.pop("_desplazar_a_decision", False):
+                components.html(
+                    """
+                    <script>
+                        setTimeout(function() {
+                            var el = window.parent.document.getElementById('paso-decision');
+                            if (el) { el.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+                        }, 150);
+                    </script>
+                    """,
+                    height=0,
+                )
             st.subheader("¿Deseas contratar esta póliza?")
             st.caption(
                 f"Folio {cot.get('folio') or cot['id']} — {cot.get('paquete') or 'Suma personalizada'} — "
