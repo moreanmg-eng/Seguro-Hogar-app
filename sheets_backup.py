@@ -88,6 +88,34 @@ def _obtener_cliente():
     return _cliente_cache
 
 
+def leer_todo() -> list[dict] | None:
+    """
+    Lee todas las filas guardadas en la hoja "cotizaciones" de Google
+    Sheets y las regresa como lista de diccionarios (todavía como
+    strings/números "crudos" de gspread, sin convertir a los tipos de
+    la base de datos local -- eso lo hace quien la llame).
+
+    Regresa None si el respaldo no está configurado, si la hoja aún no
+    existe (nunca se ha sincronizado nada), o si algo falla al leer
+    (sin internet, credenciales inválidas, etc.) -- nunca lanza una
+    excepción, para no impedir que la app arranque.
+    """
+    if not configurado():
+        return None
+    try:
+        import gspread
+
+        cliente = _obtener_cliente()
+        hoja_calculo = cliente.open_by_key(get_secret("GOOGLE_SHEET_ID"))
+        try:
+            hoja = hoja_calculo.worksheet(NOMBRE_HOJA)
+        except gspread.exceptions.WorksheetNotFound:
+            return None
+        return hoja.get_all_records()
+    except Exception:
+        return None
+
+
 def respaldar(filas: list[dict]) -> dict:
     """
     Sobrescribe la hoja "cotizaciones" de tu Google Sheet con el

@@ -140,6 +140,67 @@ def init_db():
         """)
         _migrar_columnas_faltantes(conn)
         conn.commit()
+        _restaurar_desde_sheets_si_vacio(conn)
+        _backfill_folios_faltantes(conn)
+
+
+def _restaurar_desde_sheets_si_vacio(conn):
+    """
+    Streamlit Community Cloud NO garantiza que cotizaciones_v2.db
+    sobreviva entre despliegues -- cada vez que se sube código nuevo,
+    puede arrancar con un contenedor limpio (base de datos local
+    vacía). Antes, eso provocaba que el primer respaldo automático a
+    Google Sheets SOBRESCRIBIERA la hoja con esa base vacía, borrando
+    todo el historial real que sí seguía ahí.
+
+    Para evitarlo: si la tabla local está vacía Y hay un respaldo
+    configurado en Google Sheets con datos, se restauran esas filas a
+    la base local ANTES de que la app pueda escribir nada nuevo, para
+    que el siguiente respaldo automático vuelva a reflejar el
+    historial completo en vez de borrarlo.
+
+    Nunca lanza excepción: si algo falla (sin internet, credenciales,
+    etc.) simplemente no restaura nada y la app sigue arrancando
+    normal, igual que el resto de la integración con Sheets.
+    """
+    try:
+        ya_hay_datos = conn.execute("SELECT 1 FROM cotizaciones LIMIT 1").fetchone()
+        if ya_hay_datos:
+            return
+
+        import sheets_backup
+        filas = sheets_backup.leer_todo()
+        if not filas:
+            return
+
+        columnas_tabla = [fila["name"] for fila in conn.execute("PRAGMA table_info(cotizaciones)")]
+        tipos_columna = {
+            fila["name"]: fila["type"] for fila in conn.execute("PRAGMA table_info(cotizaciones)")
+        }
+
+        def _convertir(valor, tipo_sql):
+            if valor is None or valor == "":
+                return None
+            if tipo_sql in ("INTEGER", "REAL"):
+                try:
+                    return int(valor) if tipo_sql == "INTEGER" else float(valor)
+                except (TypeError, ValueError):
+                    return None
+            return str(valor)
+
+        for fila in filas:
+            columnas_presentes = [c for c in columnas_tabla if c in fila]
+            if "id" not in columnas_presentes:
+                continue  # fila sin id no se puede restaurar de forma confiable
+            valores = [_convertir(fila.get(c), tipos_columna.get(c)) for c in columnas_presentes]
+            placeholders = ", ".join("?" for _ in columnas_presentes)
+            conn.execute(
+                f"INSERT OR IGNORE INTO cotizaciones ({', '.join(columnas_presentes)}) VALUES ({placeholders})",
+                valores,
+            )
+        conn.commit()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------
@@ -169,9 +230,14 @@ def _migrar_columnas_faltantes(conn):
         if columna not in columnas_actuales:
             conn.execute(f"ALTER TABLE cotizaciones ADD COLUMN {columna} {tipo}")
 
-    # Si la columna "folio" se acaba de agregar (o hay filas viejas sin
-    # folio, de antes de que existiera esta función), les generamos uno
-    # para que también se puedan identificar de forma consistente.
+
+def _backfill_folios_faltantes(conn):
+    """
+    Si hay filas sin folio (de antes de que existiera esta función, o
+    restauradas desde un respaldo de Sheets muy viejo que no tenía esa
+    columna), les genera uno para que también se puedan identificar de
+    forma consistente.
+    """
     filas_sin_folio = conn.execute(
         "SELECT id FROM cotizaciones WHERE folio IS NULL OR folio = ''"
     ).fetchall()
@@ -180,6 +246,8 @@ def _migrar_columnas_faltantes(conn):
             "UPDATE cotizaciones SET folio = ? WHERE id = ?",
             (_generar_folio(conn), fila["id"]),
         )
+    if filas_sin_folio:
+        conn.commit()
 
 
 # ---------------------------------------------------------------------
