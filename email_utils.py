@@ -18,6 +18,7 @@ en la carpeta correos_simulados/) en vez de enviarse de verdad, para
 que puedas probar todo el flujo sin credenciales reales.
 """
 
+import html
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
@@ -39,6 +40,41 @@ ADJUNTOS_ENTREGA_POLIZA = [
     BASE_DIR / "assets" / "cuponera_asistencias_hogar.pdf",
     BASE_DIR / "assets" / "guia_asegurado_hogar.pdf",
 ]
+
+# Logo que se inserta debajo de la firma "Raspberry | Hogar" en todos
+# los correos automáticos (nada más para verse más profesional; si no
+# existe el archivo, el correo se manda igual, solo sin logo).
+LOGO_RASPBERRY_PATH = BASE_DIR / "assets" / "logo_raspberry.png"
+LOGO_CID = "logo_raspberry"
+
+
+def _cuerpo_a_html(cuerpo: str) -> str:
+    """
+    Convierte el cuerpo de texto plano de la plantilla a un HTML
+    simple (mismos saltos de línea/párrafos), e inserta el logo justo
+    debajo de la línea de firma "Raspberry | Hogar", si esa línea
+    existe en el correo.
+    """
+    parrafos = cuerpo.strip("\n").split("\n\n")
+    html_parrafos = [
+        "<p style='margin:0 0 1em 0;'>" + html.escape(p).replace("\n", "<br>") + "</p>"
+        for p in parrafos
+    ]
+
+    firma_html = "<p style='margin:0 0 1em 0;'>" + html.escape("Raspberry | Hogar") + "</p>"
+    logo_html = (
+        f"<p style='margin:0 0 1em 0;'><img src='cid:{LOGO_CID}' alt='Raspberry' "
+        "style='max-width:160px;height:auto;'></p>"
+    )
+    if firma_html in html_parrafos:
+        idx = html_parrafos.index(firma_html)
+        html_parrafos.insert(idx + 1, logo_html)
+
+    cuerpo_html = "".join(html_parrafos)
+    return (
+        "<div style='font-family:Arial,Helvetica,sans-serif;font-size:14px;"
+        f"color:#222;'>{cuerpo_html}</div>"
+    )
 
 SMTP_HOST = get_secret("SMTP_HOST")
 SMTP_PORT = int(get_secret("SMTP_PORT", "587"))
@@ -81,6 +117,12 @@ def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[st
         msg["Cc"] = copia_a
     msg["Subject"] = asunto
     msg.set_content(cuerpo)
+
+    if LOGO_RASPBERRY_PATH.exists():
+        msg.add_alternative(_cuerpo_a_html(cuerpo), subtype="html")
+        msg.get_payload()[1].add_related(
+            LOGO_RASPBERRY_PATH.read_bytes(), maintype="image", subtype="png", cid=LOGO_CID,
+        )
 
     for ruta_adjunto in adjuntos:
         p = Path(ruta_adjunto)
