@@ -674,12 +674,32 @@ elif vista == "Administrador":
                                         key=f"cotizacion_{cot['id']}")
             else:
                 st.caption("No hay PDF de cotización disponible (fue una solicitud manual o no se guardó el archivo).")
-            archivo = st.file_uploader("Subir PDF de la póliza emitida", type="pdf", key=f"upload_{cot['id']}")
-            if archivo and st.button("Confirmar emisión y notificar al asesor", key=f"emitir_{cot['id']}"):
+            archivo = st.file_uploader(
+                "Subir PDF de la póliza emitida (el nombre del archivo debe ser el número de póliza)",
+                type="pdf", key=f"upload_{cot['id']}",
+            )
+            if archivo:
+                st.caption(f"Número de póliza detectado: **{Path(archivo.name).stem}**")
+
+            monto_descuento = None
+            if cot.get("forma_pago") == "Nómina":
+                monto_descuento = st.number_input(
+                    "Monto de descuento quincenal por nómina (MXN) *",
+                    min_value=0.0, step=50.0, format="%.2f", key=f"monto_nomina_{cot['id']}",
+                    help="Este cliente eligió pago por Nómina, así que aquí no se genera una liga de "
+                         "pago — se le informará este monto a descontar en el correo de entrega.",
+                )
+
+            disabled_emitir = not archivo or (cot.get("forma_pago") == "Nómina" and not monto_descuento)
+            if st.button("Confirmar emisión y notificar al asesor", key=f"emitir_{cot['id']}", disabled=disabled_emitir):
+                numero_poliza = Path(archivo.name).stem
                 ruta_destino = db.POLIZAS_DIR / f"poliza_{cot['id']:05d}.pdf"
                 with open(ruta_destino, "wb") as f:
                     f.write(archivo.read())
-                db.registrar_emision(cot["id"], str(ruta_destino))
+                db.registrar_emision(
+                    cot["id"], str(ruta_destino),
+                    numero_poliza=numero_poliza, monto_descuento_nomina=monto_descuento,
+                )
                 # Por ahora solo se envían 3 correos automáticos (cotización al
                 # cliente, entrega de póliza, y solicitud de contacto de asesor);
                 # este aviso al asesor queda deshabilitado a propósito — lo verá

@@ -157,6 +157,8 @@ _COLUMNAS_NUEVAS = {
     "municipio": "TEXT",
     "estado_inmueble": "TEXT",
     "folio": "TEXT",
+    "numero_poliza": "TEXT",           # nombre del PDF de la póliza (sin ".pdf"), usado para la liga de pago
+    "monto_descuento_nomina": "REAL",  # solo si forma_pago == 'Nómina'
 }
 
 
@@ -308,15 +310,27 @@ def confirmar_por_asesor(cotizacion_id: int, asesor_nombre: str, notas: str = ""
     _respaldar_en_sheets()
 
 
-def registrar_emision(cotizacion_id: int, poliza_pdf_path: str):
+def registrar_emision(cotizacion_id: int, poliza_pdf_path: str, numero_poliza: str | None = None,
+                       monto_descuento_nomina: float | None = None):
+    """
+    numero_poliza: nombre original del PDF subido (sin ".pdf"), usado
+    para construir la liga de pago (Domiciliado/Contado).
+    monto_descuento_nomina: monto quincenal que se le descontará al
+    cliente vía nómina (solo aplica cuando forma_pago == 'Nómina').
+    """
     with _conn() as conn:
         conn.execute("""
             UPDATE cotizaciones
             SET estatus = 'emitida',
                 fecha_emision = ?,
-                poliza_pdf_path = ?
+                poliza_pdf_path = ?,
+                numero_poliza = ?,
+                monto_descuento_nomina = ?
             WHERE id = ?
-        """, (datetime.now().isoformat(timespec="seconds"), poliza_pdf_path, cotizacion_id))
+        """, (
+            datetime.now().isoformat(timespec="seconds"), poliza_pdf_path,
+            numero_poliza, monto_descuento_nomina, cotizacion_id,
+        ))
         conn.commit()
     _respaldar_en_sheets()
 

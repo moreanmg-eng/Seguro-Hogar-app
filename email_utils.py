@@ -23,6 +23,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from datetime import datetime
 from string import Template
+from urllib.parse import quote
 
 from config import get_secret
 
@@ -208,6 +209,55 @@ def notificar_asesor_poliza_emitida(cotizacion: dict, correo_asesor: str, ruta_p
     return enviar_correo(correo_asesor, asunto, cuerpo, adjuntos=[ruta_poliza])
 
 
+LIGA_PAGO_BASE = "https://rby-apim-produccion.azure-api.net/insurance/home/payment/Zurich/r/{numero_poliza}"
+
+
+def _construir_info_pago(cotizacion: dict) -> str:
+    """
+    Arma el texto de la sección de pago del correo de entrega de
+    póliza, según la forma de pago que eligió el cliente:
+
+      - Domiciliado mensual / Contado: liga única para registrar sus
+        datos bancarios, construida con el número de póliza (nombre
+        del PDF subido), su nómina/matrícula (sin el prefijo L0/A0) y
+        su correo.
+      - Nómina: el monto que se le descontará quincenalmente,
+        capturado por el administrador al subir la póliza.
+
+    Si falta algún dato necesario (por ejemplo, el administrador
+    todavía no sube la póliza con su número, o no capturó el monto de
+    nómina), regresa un texto genérico en vez de tronar o mandar una
+    liga rota.
+    """
+    forma_pago = (cotizacion.get("forma_pago") or "").strip()
+    generico = (
+        "Un asesor se pondrá en contacto contigo con las instrucciones "
+        "de pago correspondientes a tu forma de pago."
+    )
+
+    if forma_pago == "Nómina":
+        monto = cotizacion.get("monto_descuento_nomina")
+        if not monto:
+            return generico
+        return f"Se te estará descontando ${float(monto):,.2f} MXN quincenalmente vía nómina."
+
+    if forma_pago in ("Domiciliado mensual", "Contado"):
+        numero_poliza = cotizacion.get("numero_poliza")
+        correo = cotizacion.get("cliente_correo")
+        nomina = (cotizacion.get("nomina") or "").strip()
+        if nomina[:2].upper() in ("L0", "A0"):
+            nomina = nomina[2:]
+        if not (numero_poliza and correo):
+            return generico
+        liga = (
+            LIGA_PAGO_BASE.format(numero_poliza=quote(str(numero_poliza), safe=""))
+            + f"?nomina={quote(nomina, safe='')}&correo={quote(correo, safe='@.')}"
+        )
+        return f"Para registrar tus datos bancarios, ingresa a la siguiente liga: {liga}"
+
+    return generico
+
+
 def notificar_cliente_poliza_entregada(cotizacion: dict, ruta_poliza: str, asesor_nombre: str,
                                         correo_asesor: str | None = None):
     """
@@ -221,15 +271,10 @@ def notificar_cliente_poliza_entregada(cotizacion: dict, ruta_poliza: str, aseso
     assets/plantillas_correo/poliza_entregada_cliente.txt — edítalo
     cuando quieras cambiar la redacción, no hace falta tocar código.
 
-    $info_pago: por ahora se rellena con un texto genérico, mientras
-    se conecta la liga de pago / monto de descuento por nómina
-    (pendiente de implementar). En cuanto esa función esté lista, se
-    calculará aquí según la forma de pago del cliente.
+    $info_pago se calcula automáticamente según la forma de pago del
+    cliente -- ver _construir_info_pago().
     """
-    info_pago = cotizacion.get("info_pago") or (
-        "Un asesor se pondrá en contacto contigo con las instrucciones "
-        "de pago correspondientes a tu forma de pago."
-    )
+    info_pago = _construir_info_pago(cotizacion)
 
     asunto, cuerpo = _cargar_plantilla(
         "poliza_entregada_cliente.txt",
