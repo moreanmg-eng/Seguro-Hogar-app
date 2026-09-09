@@ -70,6 +70,55 @@ def avisar_si_fallo_correo(resultado: dict | None):
         )
 
 
+@st.dialog("¿Confirmar envío de póliza al cliente?")
+def _dialog_confirmar_entrega(cot: dict, asesor: dict):
+    st.write(
+        f"¿Deseas confirmar el envío de la póliza al cliente "
+        f"**{cot['cliente_nombre']}** (folio {cot['folio']})?"
+    )
+    col_si, col_no = st.columns(2)
+    if col_si.button("✅ Confirmar", type="primary", use_container_width=True, key=f"dlg_confirmar_{cot['id']}"):
+        db.marcar_entregada(cot["id"])
+        if cot.get("poliza_pdf_path") and Path(cot["poliza_pdf_path"]).exists():
+            r_entrega = email_utils.notificar_cliente_poliza_entregada(
+                cot, cot["poliza_pdf_path"], asesor["nombre"], correo_asesor=asesor.get("correo"),
+            )
+            avisar_si_fallo_correo(r_entrega)
+            if r_entrega.get("modo") != "error":
+                st.success("Marcada como entregada. Le mandamos la póliza y las indicaciones al cliente (con copia a ti).")
+            else:
+                st.success("Marcada como entregada.")
+        else:
+            st.warning(
+                "Marcada como entregada, pero no encontré el PDF de la póliza para "
+                "mandárselo por correo al cliente — compártesela manualmente."
+            )
+        st.rerun()
+    if col_no.button("❌ Cancelar", use_container_width=True, key=f"dlg_cancelar_{cot['id']}"):
+        st.rerun()
+
+
+@st.dialog("Regresar póliza al administrador")
+def _dialog_regresar_poliza(cot: dict):
+    st.write(
+        f"Vas a regresar la póliza del folio **{cot['folio']}** — "
+        f"**{cot['cliente_nombre']}** al administrador para que la corrija."
+    )
+    motivo = st.text_area(
+        "Indica qué no está bien *",
+        placeholder="Ejemplo: la calle correcta es Mariano Escobedo y viene como Marian Escobedo.",
+        key=f"dlg_motivo_{cot['id']}",
+    )
+    col_enviar, col_cancelar = st.columns(2)
+    if col_enviar.button("📨 Enviar", type="primary", use_container_width=True,
+                          disabled=not motivo.strip(), key=f"dlg_enviar_regreso_{cot['id']}"):
+        db.regresar_a_admin(cot["id"], motivo.strip())
+        st.success("Póliza regresada al administrador con tu comentario.")
+        st.rerun()
+    if col_cancelar.button("❌ Cancelar", use_container_width=True, key=f"dlg_cancelar_regreso_{cot['id']}"):
+        st.rerun()
+
+
 ESTATUS_LEGIBLE = {
     "cotizada": "Cotizada (sin decisión)",
     "interesado": "Interesado en contratar",
@@ -533,23 +582,11 @@ elif vista == "Asesor":
                 with open(cot["poliza_pdf_path"], "rb") as f:
                     st.download_button("📄 Descargar póliza", f, file_name=Path(cot["poliza_pdf_path"]).name,
                                         key=f"poliza_{cot['id']}")
-            if st.button("Marcar como entregada al cliente", key=f"entregada_{cot['id']}"):
-                db.marcar_entregada(cot["id"])
-                if cot.get("poliza_pdf_path") and Path(cot["poliza_pdf_path"]).exists():
-                    r_entrega = email_utils.notificar_cliente_poliza_entregada(
-                        cot, cot["poliza_pdf_path"], asesor["nombre"], correo_asesor=asesor.get("correo"),
-                    )
-                    avisar_si_fallo_correo(r_entrega)
-                    if r_entrega.get("modo") != "error":
-                        st.success("Marcada como entregada. Le mandamos la póliza y las indicaciones al cliente (con copia a ti).")
-                    else:
-                        st.success("Marcada como entregada.")
-                else:
-                    st.warning(
-                        "Marcada como entregada, pero no encontré el PDF de la póliza para "
-                        "mandárselo por correo al cliente — compártesela manualmente."
-                    )
-                st.rerun()
+            col_entregar, col_regresar = st.columns(2)
+            if col_entregar.button("Marcar como entregada al cliente", key=f"entregada_{cot['id']}", use_container_width=True):
+                _dialog_confirmar_entrega(cot, asesor)
+            if col_regresar.button("↩️ Regresar póliza al Admin", key=f"regresar_{cot['id']}", use_container_width=True):
+                _dialog_regresar_poliza(cot)
 
 # =======================================================================
 # VISTA ADMINISTRADOR
@@ -662,7 +699,12 @@ elif vista == "Administrador":
     if not pendientes:
         st.info("No hay pólizas pendientes de emitir por ahora.")
     for cot in pendientes:
-        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
+        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"
+        if cot.get("motivo_devolucion"):
+            titulo = "⚠️ DEVUELTA POR ASESOR — " + titulo
+        with st.expander(titulo):
+            if cot.get("motivo_devolucion"):
+                st.error(f"**El asesor regresó esta póliza para corrección:** {cot['motivo_devolucion']}")
             st.write(f"**Asesor:** {cot['asesor_asignado']}")
             st.write(f"**RFC:** {cot.get('rfc') or '⚠️ no lo dejó — pídeselo antes de emitir'}")
             st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")

@@ -159,6 +159,7 @@ _COLUMNAS_NUEVAS = {
     "folio": "TEXT",
     "numero_poliza": "TEXT",           # nombre del PDF de la póliza (sin ".pdf"), usado para la liga de pago
     "monto_descuento_nomina": "REAL",  # solo si forma_pago == 'Nómina'
+    "motivo_devolucion": "TEXT",       # comentario del asesor al regresar una póliza mal emitida al admin
 }
 
 
@@ -325,12 +326,37 @@ def registrar_emision(cotizacion_id: int, poliza_pdf_path: str, numero_poliza: s
                 fecha_emision = ?,
                 poliza_pdf_path = ?,
                 numero_poliza = ?,
-                monto_descuento_nomina = ?
+                monto_descuento_nomina = ?,
+                motivo_devolucion = NULL
             WHERE id = ?
         """, (
             datetime.now().isoformat(timespec="seconds"), poliza_pdf_path,
             numero_poliza, monto_descuento_nomina, cotizacion_id,
         ))
+        conn.commit()
+    _respaldar_en_sheets()
+
+
+def regresar_a_admin(cotizacion_id: int, motivo: str):
+    """
+    El asesor detectó que la póliza no está correctamente emitida (por
+    ejemplo, un error de captura) y la regresa a la bandeja del
+    administrador para que la corrija: el caso vuelve a aparecer en
+    "Confirmados por asesor, pendientes de emitir", con el comentario
+    del asesor visible, y se limpia el PDF de la póliza mal emitida
+    (el número de póliza y el monto de descuento por nómina, si los
+    había, se quedan como estaban -- el admin los puede corregir al
+    volver a subir la póliza).
+    """
+    with _conn() as conn:
+        conn.execute("""
+            UPDATE cotizaciones
+            SET estatus = 'confirmado_por_asesor',
+                poliza_pdf_path = NULL,
+                fecha_emision = NULL,
+                motivo_devolucion = ?
+            WHERE id = ?
+        """, (motivo, cotizacion_id))
         conn.commit()
     _respaldar_en_sheets()
 
