@@ -19,6 +19,7 @@ que puedas probar todo el flujo sin credenciales reales.
 """
 
 import html
+import re
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
@@ -48,16 +49,36 @@ LOGO_RASPBERRY_PATH = BASE_DIR / "assets" / "logo_raspberry.png"
 LOGO_CID = "logo_raspberry"
 
 
+def _aplicar_negritas(texto_escapado: str) -> str:
+    """
+    Convierte **texto** en <strong>texto</strong>, para que se pueda
+    marcar texto en negritas directo desde las plantillas .txt (sin
+    tocar código): en el archivo de la plantilla, solo hay que
+    encerrar la palabra o frase entre dobles asteriscos, por ejemplo
+    "**IMPORTANTE**".
+
+    Se aplica DESPUÉS de html.escape(), por seguridad: cualquier "<"
+    o "&" que venga de un dato real (nombre, dirección, etc.) ya
+    quedó convertido a texto plano inofensivo antes de llegar aquí,
+    así que no hay riesgo de que algún dato del cliente rompa el
+    formato del correo.
+    """
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", texto_escapado, flags=re.DOTALL)
+
+
 def _cuerpo_a_html(cuerpo: str) -> str:
     """
     Convierte el cuerpo de texto plano de la plantilla a un HTML
     simple (mismos saltos de línea/párrafos), e inserta el logo justo
     debajo de la línea de firma "Raspberry | Hogar", si esa línea
-    existe en el correo.
+    existe en el correo. También convierte **texto** en negritas
+    (ver _aplicar_negritas).
     """
     parrafos = cuerpo.strip("\n").split("\n\n")
     html_parrafos = [
-        "<p style='margin:0 0 1em 0;'>" + html.escape(p).replace("\n", "<br>") + "</p>"
+        "<p style='margin:0 0 1em 0;'>"
+        + _aplicar_negritas(html.escape(p).replace("\n", "<br>"))
+        + "</p>"
         for p in parrafos
     ]
 
