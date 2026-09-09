@@ -548,6 +548,33 @@ elif vista == "Asesor":
                 st.rerun()
 
     st.divider()
+    st.subheader("📋 Prospectos asignados por Administración")
+    st.caption(
+        "Clientes que solo cotizaron (no pidieron contacto ni confirmaron "
+        "contratar) y que el administrador te asignó para que los "
+        "contactes tú directamente."
+    )
+    asignados_admin = [
+        c for c in db.listar(estatus="cotizada")
+        if c["asesor_asignado"] == asesor["nombre"]
+    ]
+    if not asignados_admin:
+        st.info("No tienes prospectos asignados por el administrador por ahora.")
+    for cot in asignados_admin:
+        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
+            st.write(f"**Correo:** {cot['cliente_correo']}")
+            st.write(f"**Teléfono:** {cot['cliente_telefono']}")
+            st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
+            st.write(f"**Prima total:** ${cot['prima_total']:,.2f} MXN")
+            st.write(f"**Código postal:** {cot['codigo_postal']}")
+            direccion = ", ".join(filter(None, [cot.get("calle"), cot.get("numero_ext"), cot.get("colonia")]))
+            st.write(f"**Dirección:** {direccion or '—'}")
+            if cot["pdf_cotizacion_path"] and Path(cot["pdf_cotizacion_path"]).exists():
+                with open(cot["pdf_cotizacion_path"], "rb") as f:
+                    st.download_button("📄 Ver cotización", f, file_name=Path(cot["pdf_cotizacion_path"]).name,
+                                        key=f"pdf_asignado_{cot['id']}")
+
+    st.divider()
     st.subheader("Solicitudes de cotización manual (suma mayor a los paquetes)")
     manuales = [
         c for c in db.listar(estatus="solicitud_manual")
@@ -653,7 +680,10 @@ elif vista == "Administrador":
         # sin importar en qué paso del proceso vaya ahora.
         en_pipeline = n_interesados + n_confirmados + n_polizas
         tasa_conversion = (en_pipeline / total_cotizaciones * 100) if total_cotizaciones else 0
-        prima_total_emitida = df_m.loc[df_m["estatus"].isin(["emitida", "entregada"]), "prima_total"].fillna(0).sum()
+        # Prima NETA (antes de IVA y del $1 de derecho de emisión) -- es la
+        # que se usa para contar internamente, a diferencia de "prima_total"
+        # que es lo que paga el cliente (ya con impuestos y derecho incluidos).
+        prima_neta_emitida = df_m.loc[df_m["estatus"].isin(["emitida", "entregada"]), "prima_neta_prorateada"].fillna(0).sum()
 
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Cotizaciones totales", total_cotizaciones)
@@ -662,7 +692,7 @@ elif vista == "Administrador":
         col_m4.metric("Tasa de conversión", f"{tasa_conversion:.0f}%", help="Cotizaciones que llegaron a 'interesado' o más adelante")
 
         col_m5, col_m6 = st.columns(2)
-        col_m5.metric("Prima total emitida", f"${prima_total_emitida:,.2f} MXN")
+        col_m5.metric("Prima neta emitida", f"${prima_neta_emitida:,.2f} MXN")
         col_m6.metric("Solicitudes manuales (suma mayor)", n_manuales)
 
         col_g1, col_g2 = st.columns(2)
@@ -680,14 +710,14 @@ elif vista == "Administrador":
         if df_m["asesor_asignado"].notna().any():
             st.caption("Casos por asesor (todos los estatus)")
             df_m["_es_poliza"] = df_m["estatus"].isin(["emitida", "entregada"])
-            df_m["_prima_emitida"] = df_m["prima_total"].where(df_m["_es_poliza"], 0).fillna(0)
+            df_m["_prima_neta_emitida"] = df_m["prima_neta_prorateada"].where(df_m["_es_poliza"], 0).fillna(0)
             resumen_asesor = (
                 df_m.dropna(subset=["asesor_asignado"])
                 .groupby("asesor_asignado")
                 .agg(
                     casos=("id", "count"),
                     emitidas=("_es_poliza", "sum"),
-                    prima_total_emitida=("_prima_emitida", "sum"),
+                    prima_neta_emitida=("_prima_neta_emitida", "sum"),
                 )
                 .sort_values("casos", ascending=False)
             )
@@ -759,6 +789,55 @@ elif vista == "Administrador":
             f"Folio {cot['folio']} — {cot['cliente_nombre']} — suma deseada "
             f"${cot['suma_deseada']:,.0f} — asesor: {cot['asesor_asignado'] or 'sin asignar'}"
         )
+
+    st.divider()
+    st.subheader("Cotizaciones sin seguimiento (el cliente solo cotizó)")
+    st.caption(
+        "Aquí aparecen los clientes que generaron su cotización pero no "
+        "seleccionaron ninguna opción después (ni pidieron que los "
+        "contacten, ni confirmaron contratar). Puedes asignarle un asesor "
+        "para que le dé seguimiento por su cuenta y cierre la venta."
+    )
+    sin_seguimiento = db.listar(estatus="cotizada")
+    if not sin_seguimiento:
+        st.info("No hay cotizaciones sin seguimiento por ahora.")
+    for cot in sin_seguimiento:
+        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"
+        if cot.get("asesor_asignado"):
+            titulo += f"  ·  asignado a {cot['asesor_asignado']}"
+        with st.expander(titulo):
+            st.write(f"**Correo:** {cot['cliente_correo']}")
+            st.write(f"**Teléfono:** {cot['cliente_telefono']}")
+            st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
+            st.write(f"**Prima total:** ${cot['prima_total']:,.2f} MXN")
+            st.write(f"**Código postal:** {cot['codigo_postal']}")
+            direccion = ", ".join(filter(None, [cot.get("calle"), cot.get("numero_ext"), cot.get("colonia")]))
+            st.write(f"**Dirección:** {direccion or '—'}")
+            if cot.get("pdf_cotizacion_path") and Path(cot["pdf_cotizacion_path"]).exists():
+                with open(cot["pdf_cotizacion_path"], "rb") as f:
+                    st.download_button("📄 Ver cotización", f, file_name=Path(cot["pdf_cotizacion_path"]).name,
+                                        key=f"cotizada_pdf_{cot['id']}")
+
+            candidatos = asesores_mod.asesores_para_publico(cot.get("nomina"))
+            nombres_candidatos = candidatos["nombre"].tolist()
+            if not nombres_candidatos:
+                st.warning("No hay asesores configurados en el catálogo.")
+            else:
+                index_actual = (
+                    nombres_candidatos.index(cot["asesor_asignado"])
+                    if cot.get("asesor_asignado") in nombres_candidatos else 0
+                )
+                asesor_elegido = st.selectbox(
+                    "Asignar a Asesor", nombres_candidatos, index=index_actual,
+                    key=f"select_asesor_{cot['id']}",
+                )
+                if st.button("Asignar a Asesor", key=f"btn_asignar_{cot['id']}", use_container_width=True):
+                    db.actualizar_cotizacion(cot["id"], asesor_asignado=asesor_elegido)
+                    st.success(
+                        f"Asignado a {asesor_elegido}. Ya lo puede ver en su portal, en "
+                        "\"Prospectos asignados por Administración\"."
+                    )
+                    st.rerun()
 
     st.divider()
     st.subheader("Panel general de todas las cotizaciones")
