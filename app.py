@@ -120,6 +120,28 @@ def _dialog_regresar_poliza(cot: dict):
         st.rerun()
 
 
+@st.dialog("¿Cerrar esta solicitud como no vendida?")
+def _dialog_cerrar_sin_venta(cot: dict):
+    st.write(
+        f"Vas a cerrar la solicitud del folio **{cot['folio']}** — "
+        f"**{cot['cliente_nombre']}** como **no vendida**. Ya no aparecerá "
+        "en tus pendientes."
+    )
+    motivo = st.text_area(
+        "Motivo (opcional)",
+        placeholder="Ejemplo: el cliente ya no contestó, o decidió no contratar.",
+        key=f"dlg_motivo_cierre_{cot['id']}",
+    )
+    col_si, col_no = st.columns(2)
+    if col_si.button("🚫 Cerrar como no vendida", type="primary", use_container_width=True,
+                      key=f"dlg_confirmar_cierre_{cot['id']}"):
+        db.cerrar_sin_venta(cot["id"], motivo.strip() or "El cliente no confirmó / declinó la cotización manual.")
+        st.success("Solicitud cerrada como no vendida.")
+        st.rerun()
+    if col_no.button("Cancelar", use_container_width=True, key=f"dlg_cancelar_cierre_{cot['id']}"):
+        st.rerun()
+
+
 ESTATUS_LEGIBLE = {
     "cotizada": "Cotizada (sin decisión)",
     "interesado": "Interesado en contratar",
@@ -127,6 +149,7 @@ ESTATUS_LEGIBLE = {
     "emitida": "Póliza emitida",
     "entregada": "Entregada al cliente",
     "solicitud_manual": "Requiere cotización manual",
+    "no_vendida": "No vendida (cerrada sin venta)",
 }
 
 vista = st.sidebar.radio("¿Quién eres?", ["Cliente", "Asesor", "Administrador"])
@@ -616,6 +639,54 @@ elif vista == "Asesor":
                     st.rerun()
             else:
                 st.caption(f"Asignado a {cot['asesor_asignado']}")
+                st.write(
+                    "Cuando ya hayas cotizado por fuera en el portal de la "
+                    "aseguradora **y el cliente ya te haya confirmado** que "
+                    "quiere contratar, sube aquí esa cotización, la prima "
+                    "neta acordada y su RFC para mandarla a emisión con el "
+                    "administrador."
+                )
+                archivo_manual = st.file_uploader(
+                    "Cotización generada en el portal de la aseguradora (PDF)",
+                    type="pdf", key=f"upload_manual_{cot['id']}",
+                )
+                prima_neta_manual = st.number_input(
+                    "Prima neta acordada con el cliente (MXN)",
+                    min_value=0.0, step=100.0, format="%.2f", key=f"prima_manual_{cot['id']}",
+                )
+                rfc_manual = st.text_input(
+                    "RFC del cliente *", key=f"rfc_manual_{cot['id']}", max_chars=13,
+                )
+                rfc_manual_valido = _rfc_parece_valido(rfc_manual)
+                if rfc_manual and not rfc_manual_valido:
+                    st.caption("⚠️ Verifica el RFC: debe tener 12 o 13 caracteres (letras y números).")
+
+                col_confirmar, col_cerrar = st.columns(2)
+                if col_confirmar.button(
+                    "✅ Confirmar listo para emisión", key=f"confirmar_manual_{cot['id']}",
+                    disabled=not (archivo_manual and prima_neta_manual and rfc_manual_valido),
+                    use_container_width=True,
+                ):
+                    ruta_destino = pdf_generator.SALIDA_DIR / f"cotizacion_manual_{cot['id']:05d}.pdf"
+                    with open(ruta_destino, "wb") as f:
+                        f.write(archivo_manual.read())
+                    db.actualizar_cotizacion(
+                        cot["id"],
+                        pdf_cotizacion_path=str(ruta_destino),
+                        prima_total=prima_neta_manual,
+                        prima_neta_prorateada=prima_neta_manual,
+                        rfc=rfc_manual.strip().upper(),
+                    )
+                    db.confirmar_por_asesor(
+                        cot["id"], asesor["nombre"],
+                        "Cotización manual: el cliente confirmó que quiere contratar.",
+                    )
+                    st.success("Enviado al administrador para emitir la póliza.")
+                    st.rerun()
+                if col_cerrar.button(
+                    "🚫 Cerrar como no vendida", key=f"cerrar_manual_{cot['id']}", use_container_width=True,
+                ):
+                    _dialog_cerrar_sin_venta(cot)
 
     st.divider()
     st.subheader("Pólizas emitidas, listas para compartir con el cliente")
@@ -748,7 +819,8 @@ elif vista == "Administrador":
     if not pendientes:
         st.info("No hay pólizas pendientes de emitir por ahora.")
     for cot in pendientes:
-        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"
+        detalle_paquete = f"{cot['paquete']} ({cot['tipo_paquete']})" if cot.get("paquete") else "Cotización manual"
+        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {detalle_paquete}"
         if cot.get("motivo_devolucion"):
             titulo = "⚠️ DEVUELTA POR ASESOR — " + titulo
         with st.expander(titulo):
@@ -758,13 +830,13 @@ elif vista == "Administrador":
             st.write(f"**RFC:** {cot.get('rfc') or '⚠️ no lo dejó — pídeselo antes de emitir'}")
             st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
             st.write(f"**Notas del asesor:** {cot['notas'] or '—'}")
-            st.write(f"**Prima total:** ${cot['prima_total']:,.2f} MXN")
+            st.write(f"**Prima total:** ${(cot.get('prima_total') or 0):,.2f} MXN")
             if cot.get("pdf_cotizacion_path") and Path(cot["pdf_cotizacion_path"]).exists():
                 with open(cot["pdf_cotizacion_path"], "rb") as f:
                     st.download_button("📄 Descargar cotización", f, file_name=Path(cot["pdf_cotizacion_path"]).name,
                                         key=f"cotizacion_{cot['id']}")
             else:
-                st.caption("No hay PDF de cotización disponible (fue una solicitud manual o no se guardó el archivo).")
+                st.caption("No hay PDF de cotización disponible (no se guardó el archivo).")
             archivo = st.file_uploader(
                 "Subir PDF de la póliza emitida (el nombre del archivo debe ser el número de póliza)",
                 type="pdf", key=f"upload_{cot['id']}",
