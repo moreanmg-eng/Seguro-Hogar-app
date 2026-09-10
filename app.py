@@ -60,6 +60,19 @@ def _visible_para_asesor(cot: dict, asesor: dict) -> bool:
     )
 
 
+def _marca_duplicado(cot: dict) -> str:
+    """
+    Si esta cotización quedó marcada como posible duplicado de una
+    anterior (mismo cliente -- nombre y correo -- mismo domicilio y
+    mismo paquete, en cualquier momento de su historial), regresa un
+    texto corto para agregar al título/detalle donde se muestra, por
+    ejemplo en los paneles de Asesor y Administrador. No le avisa nada
+    al cliente; es solo una marca interna. Ver db.buscar_folio_duplicado.
+    """
+    folio_anterior = cot.get("duplicado_de_folio")
+    return f" ⚠️ Posible duplicado (folio {folio_anterior})" if folio_anterior else ""
+
+
 PLACEHOLDER_PAGO = "Selecciona una opción"
 
 ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD", "cambia-esta-clave")
@@ -180,6 +193,44 @@ if email_utils.MODO_SIMULADO:
     )
 
 # =======================================================================
+# Los widgets del formulario de cotizar que hay que vaciar cuando el
+# cliente da clic en "Nueva cotización", para que pueda cotizar otra
+# vez sin recargar la página.
+#
+# Nota: en esta versión de Streamlit, con solo borrar la llave de
+# st.session_state (session_state.pop) el widget NO vuelve a su valor
+# por default en el siguiente rerun -- se queda pegado con el último
+# valor que tenía. Por eso aquí definimos explícitamente el valor "vacío"
+# real de cada widget, y se lo volvemos a asignar antes de re-dibujar la
+# página (ver el botón "🔄 Nueva cotización" más abajo).
+#
+# "c_folio_recuperar" y "c_correo_recuperar" (del cuadro "¿Ya cotizaste?"
+# que está arriba de este botón) quedan fuera de este diccionario a
+# propósito: como ya se dibujaron antes de llegar al botón en esta misma
+# corrida, Streamlit no deja reasignarles un valor aquí (solo se puede
+# antes de que el widget se dibuje) -- esos dos se vacían con
+# session_state.pop() en vez de asignación directa.
+def _valores_vacios_formulario_cliente() -> dict:
+    etiqueta_default = ""
+    try:
+        opciones_propietario = cotizador.paquetes_disponibles("propietario")
+        if opciones_propietario:
+            etiqueta_default = opciones_propietario[0]["etiqueta"]
+    except Exception:
+        pass
+    return {
+        "c_nombre": "", "c_nomina": "", "c_correo": "", "c_telefono": "", "c_cp": "",
+        "c_tipo_cliente": "Propietario", "c_para_otro": "Para mí",
+        "c_ben_nombre": "", "c_ben_relacion": "",
+        "c_forma_pago": PLACEHOLDER_PAGO,
+        "c_calle": "", "c_num_ext": "", "c_num_int": "", "c_colonia": "",
+        "c_paquete_etiqueta": etiqueta_default, "c_suma_deseada": 0.0,
+        "c_terremoto": False, "c_acepto_privacidad": False,
+        "c_decision": "Sí, quiero contratar", "asesor_pref": "Cualquiera disponible",
+        "c_rfc_confirmar": "", "c_rfc_info": "",
+    }
+
+
 # VISTA CLIENTE
 # =======================================================================
 if vista == "Cliente":
@@ -221,7 +272,21 @@ if vista == "Cliente":
                     st.session_state["_desplazar_a_decision"] = True
                     st.success("¡Listo! Encontramos tu cotización — te llevamos ahí abajo. 👇")
 
-    st.subheader("1. Tus datos")
+    col_titulo1, col_reset1 = st.columns([3, 1])
+    col_titulo1.subheader("1. Tus datos")
+    if st.session_state.get("c_cotizacion_enviada"):
+        if col_reset1.button("🔄 Nueva cotización", use_container_width=True, key="c_nueva_cotizacion"):
+            st.session_state.pop("c_folio_recuperar", None)
+            st.session_state.pop("c_correo_recuperar", None)
+            for clave, valor in _valores_vacios_formulario_cliente().items():
+                st.session_state[clave] = valor
+            st.session_state.pop("ultima_cotizacion_id", None)
+            st.session_state.pop("_desplazar_a_decision", None)
+            st.session_state.pop("c_cotizacion_enviada", None)
+            st.session_state.pop("_recien_cotizada", None)
+            st.session_state.pop("_recien_cotizada_manual", None)
+            st.rerun()
+
     col1, col2 = st.columns(2)
     with col1:
         nombre = st.text_input("Nombre completo *", key="c_nombre")
@@ -386,10 +451,14 @@ if vista == "Cliente":
             # Por ahora solo se envían 3 correos automáticos (cotización al
             # cliente, entrega de póliza, y solicitud de contacto de asesor);
             # este aviso al administrador queda deshabilitado a propósito.
-            st.success(
-                "¡Gracias! Tu información ya fue recabada. Un asesor se pondrá "
-                "en contacto contigo pronto para cotizar tu caso."
-            )
+            #
+            # El mensaje de éxito se vuelve a mostrar justo después del
+            # rerun (ver más abajo), no aquí -- así el botón "Nueva
+            # cotización" de arriba ya alcanza a aparecer en la misma
+            # pantalla que confirma el envío.
+            st.session_state["c_cotizacion_enviada"] = True
+            st.session_state["_recien_cotizada_manual"] = True
+            st.rerun()
         else:
             fin_vigencia = db.get_fecha_fin_vigencia()
             try:
@@ -400,6 +469,18 @@ if vista == "Cliente":
             except ValueError as e:
                 st.error(str(e))
             else:
+                # Antes de crear la cotización, se revisa si este mismo
+                # cliente (mismo nombre Y mismo correo) ya cotizó antes
+                # exactamente el mismo domicilio con el mismo paquete, en
+                # cualquier momento de su historial. No se le avisa nada
+                # al cliente ni se bloquea -- solo queda marcada
+                # internamente para que el admin/asesor la vean en su
+                # panel (ver "duplicado_de_folio" / _marca_duplicado()).
+                folio_duplicado = db.buscar_folio_duplicado(
+                    cliente_nombre=nombre, cliente_correo=correo,
+                    calle=calle, numero_ext=numero_ext, colonia=colonia,
+                    codigo_postal=resultado["codigo_postal"], paquete=resultado["paquete"],
+                )
                 cot_id = db.crear_cotizacion(
                     cliente_nombre=nombre, nomina=nomina, forma_pago=forma_pago, cliente_correo=correo,
                     cliente_telefono=telefono, codigo_postal=resultado["codigo_postal"],
@@ -416,6 +497,7 @@ if vista == "Cliente":
                     fecha_fin_vigencia_usada=resultado["fecha_fin_vigencia"].isoformat(),
                     prima_neta_prorateada=resultado["prima_neta_prorateada"], iva=resultado["iva"],
                     derecho_emision=resultado["derecho_emision"], prima_total=resultado["prima_total"],
+                    duplicado_de_folio=folio_duplicado,
                 )
                 folio_creado = db.obtener(cot_id)["folio"]
                 datos_cliente = dict(
@@ -430,29 +512,60 @@ if vista == "Cliente":
                 cot_recien_creada = db.obtener(cot_id)
                 r_cliente = email_utils.notificar_cliente_cotizacion(cot_recien_creada, ruta_pdf)
 
+                # El resumen (mensaje de éxito, prima, botón de descarga) se
+                # guarda para mostrarse justo después del rerun de abajo, en
+                # vez de aquí mismo -- así el botón "Nueva cotización" de
+                # arriba ya alcanza a aparecer en la misma pantalla que
+                # confirma la cotización (Streamlit no vuelve a dibujar lo
+                # de arriba de este botón dentro de la misma corrida).
                 st.session_state["ultima_cotizacion_id"] = cot_id
-                st.success(f"¡Cotización lista! Folio {folio_creado}")
-                st.metric("Prima total a pagar", f"${resultado['prima_total']:,.2f} MXN",
-                          help=f"Prorrateada por {resultado['dias_restantes']} días restantes de vigencia")
+                st.session_state["c_cotizacion_enviada"] = True
+                st.session_state["_recien_cotizada"] = {
+                    "ruta_pdf": ruta_pdf,
+                    "prima_total": resultado["prima_total"],
+                    "dias_restantes": resultado["dias_restantes"],
+                    "correo": correo,
+                    "email_error": r_cliente.get("error") if r_cliente.get("modo") == "error" else None,
+                }
+                st.rerun()
 
-                if r_cliente.get("modo") == "error":
-                    st.warning(
-                        "Tu cotización se generó correctamente, pero no pudimos "
-                        f"enviártela por correo automáticamente. Descárgala aquí abajo. "
-                        f"Detalle: {r_cliente.get('error')}"
-                    )
-                else:
-                    st.caption(f"📧 También te enviamos esta cotización a {correo}.")
-
-                with open(ruta_pdf, "rb") as f:
-                    st.download_button("📄 Descargar cotización en PDF", f,
-                                        file_name=Path(ruta_pdf).name, mime="application/pdf")
+    if st.session_state.pop("_recien_cotizada_manual", False):
+        st.success(
+            "¡Gracias! Tu información ya fue recabada. Un asesor se pondrá "
+            "en contacto contigo pronto para cotizar tu caso."
+        )
 
     # Paso final: decisión de contratar, para la última cotización generada en esta sesión
     if "ultima_cotizacion_id" in st.session_state:
         st.divider()
         cot_id = st.session_state["ultima_cotizacion_id"]
         cot = db.obtener(cot_id)
+
+        resumen = st.session_state.pop("_recien_cotizada", None)
+        if resumen:
+            st.success(f"¡Cotización lista! Folio {(cot or {}).get('folio') or cot_id}")
+            st.metric(
+                "Prima total a pagar", f"${resumen['prima_total']:,.2f} MXN",
+                help=f"Prorrateada por {resumen['dias_restantes']} días restantes de vigencia",
+            )
+            if resumen.get("email_error"):
+                st.warning(
+                    "Tu cotización se generó correctamente, pero no pudimos "
+                    f"enviártela por correo automáticamente. Descárgala aquí abajo. "
+                    f"Detalle: {resumen['email_error']}"
+                )
+            else:
+                st.caption(f"📧 También te enviamos esta cotización a {resumen['correo']}.")
+
+            ruta_pdf_resumen = resumen.get("ruta_pdf")
+            if ruta_pdf_resumen and Path(ruta_pdf_resumen).exists():
+                with open(ruta_pdf_resumen, "rb") as f:
+                    st.download_button(
+                        "📄 Descargar cotización en PDF", f,
+                        file_name=Path(ruta_pdf_resumen).name, mime="application/pdf",
+                        key="c_descarga_pdf_recien",
+                    )
+
         if cot and cot["estatus"] == "cotizada":
             st.markdown('<div id="paso-decision"></div>', unsafe_allow_html=True)
             if st.session_state.pop("_desplazar_a_decision", False):
@@ -592,7 +705,7 @@ elif vista == "Asesor":
     if not interesados:
         st.info("No tienes prospectos pendientes por ahora.")
     for cot in interesados:
-        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
+        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})" + _marca_duplicado(cot)):
             st.write(f"**Correo:** {cot['cliente_correo']}")
             st.write(f"**Teléfono:** {cot['cliente_telefono']}")
             st.write(f"**RFC:** {cot.get('rfc') or '— (no lo dejó)'}")
@@ -629,7 +742,7 @@ elif vista == "Asesor":
     if not asignados_admin:
         st.info("No tienes prospectos asignados por el administrador por ahora.")
     for cot in asignados_admin:
-        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"):
+        with st.expander(f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})" + _marca_duplicado(cot)):
             st.write(f"**Correo:** {cot['cliente_correo']}")
             st.write(f"**Teléfono:** {cot['cliente_telefono']}")
             st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
@@ -842,7 +955,7 @@ elif vista == "Administrador":
         st.info("No hay pólizas pendientes de emitir por ahora.")
     for cot in pendientes:
         detalle_paquete = f"{cot['paquete']} ({cot['tipo_paquete']})" if cot.get("paquete") else "Cotización manual"
-        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {detalle_paquete}"
+        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {detalle_paquete}" + _marca_duplicado(cot)
         if cot.get("motivo_devolucion"):
             titulo = "⚠️ DEVUELTA POR ASESOR — " + titulo
         with st.expander(titulo):
@@ -929,7 +1042,7 @@ elif vista == "Administrador":
         titulo = (
             f"Folio {cot['folio']} — {cot['cliente_nombre']} — {detalle} — "
             f"{ESTATUS_LEGIBLE.get(cot['estatus'], cot['estatus'])}"
-        )
+        ) + _marca_duplicado(cot)
         with st.expander(titulo):
             st.write(f"**Nómina/Matrícula ingresada:** {cot.get('nomina') or '— (no la dejó)'}")
             st.write(f"**Correo:** {cot['cliente_correo']}")
@@ -970,7 +1083,7 @@ elif vista == "Administrador":
     if not sin_seguimiento:
         st.info("No hay cotizaciones sin seguimiento por ahora.")
     for cot in sin_seguimiento:
-        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})"
+        titulo = f"Folio {cot['folio']} — {cot['cliente_nombre']} — {cot['paquete']} ({cot['tipo_paquete']})" + _marca_duplicado(cot)
         if cot.get("asesor_asignado"):
             titulo += f"  ·  asignado a {cot['asesor_asignado']}"
         with st.expander(titulo):

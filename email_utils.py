@@ -48,6 +48,12 @@ ADJUNTOS_ENTREGA_POLIZA = [
 LOGO_RASPBERRY_PATH = BASE_DIR / "assets" / "logo_raspberry.png"
 LOGO_CID = "logo_raspberry"
 
+# Icono de la casita que se muestra junto a "Hogar" en la firma, justo
+# arriba del logo de Raspberry. Igual que el logo: si no existe el
+# archivo, el correo se manda igual, solo sin el icono.
+ICONO_HOGAR_PATH = BASE_DIR / "assets" / "icono_hogar.png"
+ICONO_HOGAR_CID = "icono_hogar"
+
 
 def _aplicar_negritas(texto_escapado: str) -> str:
     """
@@ -86,13 +92,17 @@ def _aplicar_cursivas(texto_escapado: str) -> str:
     return re.sub(r"_(.+?)_", r"<em>\1</em>", texto_escapado, flags=re.DOTALL)
 
 
-def _cuerpo_a_html(cuerpo: str) -> str:
+def _cuerpo_a_html(cuerpo: str, incluir_icono: bool = True) -> str:
     """
     Convierte el cuerpo de texto plano de la plantilla a un HTML
     simple (mismos saltos de línea/párrafos), e inserta el logo justo
     debajo de la línea de firma "Raspberry | Hogar", si esa línea
     existe en el correo. También convierte **texto** en negritas y
     _texto_ en cursivas (ver _aplicar_negritas y _aplicar_cursivas).
+
+    incluir_icono: si es False (porque el archivo del icono de la
+    casita no existe), la firma se queda solo con "| Hogar" en
+    negritas, sin la imagen -- para no dejar un ícono roto en el correo.
     """
     parrafos = cuerpo.strip("\n").split("\n\n")
     html_parrafos = [
@@ -103,12 +113,27 @@ def _cuerpo_a_html(cuerpo: str) -> str:
     ]
 
     firma_html = "<p style='margin:0 0 1em 0;'>" + html.escape("Raspberry | Hogar") + "</p>"
+    icono_img_html = (
+        f"<img src='cid:{ICONO_HOGAR_CID}' alt='' "
+        "style='height:20px;width:20px;vertical-align:middle;margin-right:6px;'>"
+        if incluir_icono else ""
+    )
+    firma_con_icono_html = (
+        "<p style='margin:0 0 0.3em 0;'>"
+        f"{icono_img_html}"
+        "<strong style='vertical-align:middle;font-size:15px;'>| Hogar</strong>"
+        "</p>"
+    )
     logo_html = (
         f"<p style='margin:0 0 1em 0;'><img src='cid:{LOGO_CID}' alt='Raspberry' "
         "style='max-width:160px;height:auto;'></p>"
     )
     if firma_html in html_parrafos:
         idx = html_parrafos.index(firma_html)
+        # Reemplaza la línea de texto "Raspberry | Hogar" por el icono de
+        # la casita + "| Hogar", y debajo el logo de Raspberry -- así
+        # queda igual que la firma de dos niveles del ejemplo.
+        html_parrafos[idx] = firma_con_icono_html
         html_parrafos.insert(idx + 1, logo_html)
 
     cuerpo_html = "".join(html_parrafos)
@@ -160,10 +185,15 @@ def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[st
     msg.set_content(cuerpo)
 
     if LOGO_RASPBERRY_PATH.exists():
-        msg.add_alternative(_cuerpo_a_html(cuerpo), subtype="html")
+        incluir_icono = ICONO_HOGAR_PATH.exists()
+        msg.add_alternative(_cuerpo_a_html(cuerpo, incluir_icono=incluir_icono), subtype="html")
         msg.get_payload()[1].add_related(
             LOGO_RASPBERRY_PATH.read_bytes(), maintype="image", subtype="png", cid=LOGO_CID,
         )
+        if incluir_icono:
+            msg.get_payload()[1].add_related(
+                ICONO_HOGAR_PATH.read_bytes(), maintype="image", subtype="png", cid=ICONO_HOGAR_CID,
+            )
 
     for ruta_adjunto in adjuntos:
         p = Path(ruta_adjunto)

@@ -221,6 +221,7 @@ _COLUMNAS_NUEVAS = {
     "numero_poliza": "TEXT",           # nombre del PDF de la póliza (sin ".pdf"), usado para la liga de pago
     "monto_descuento_nomina": "REAL",  # solo si forma_pago == 'Nómina'
     "motivo_devolucion": "TEXT",       # comentario del asesor al regresar una póliza mal emitida al admin
+    "duplicado_de_folio": "TEXT",      # folio de una cotización anterior con el mismo cliente+domicilio+paquete
 }
 
 
@@ -308,6 +309,42 @@ def _respaldar_en_sheets():
         pass
 
 
+def buscar_folio_duplicado(cliente_nombre: str, cliente_correo: str, calle: str,
+                            numero_ext: str, colonia: str, codigo_postal: str,
+                            paquete: str) -> str | None:
+    """
+    Busca, en TODO el historial (sin importar estatus ni qué tan vieja
+    sea la cotización), si este mismo cliente (mismo nombre Y mismo
+    correo) ya cotizó antes exactamente el mismo domicilio (calle,
+    número ext., colonia y código postal) con el mismo paquete. Si
+    encuentra una coincidencia, regresa el folio de la cotización
+    anterior más antigua que coincida; si no, regresa None.
+
+    Esto NO bloquea ni le avisa nada al cliente -- solo se usa para
+    marcar la nueva cotización como "posible duplicado" (ver
+    duplicado_de_folio) para que el admin/asesor lo vean en su panel.
+    """
+    if not (cliente_nombre and cliente_correo and calle and numero_ext and colonia and paquete):
+        return None
+    with _conn() as conn:
+        fila = conn.execute("""
+            SELECT folio FROM cotizaciones
+            WHERE TRIM(UPPER(cliente_nombre)) = TRIM(UPPER(?))
+              AND TRIM(LOWER(cliente_correo)) = TRIM(LOWER(?))
+              AND TRIM(UPPER(calle)) = TRIM(UPPER(?))
+              AND TRIM(UPPER(numero_ext)) = TRIM(UPPER(?))
+              AND TRIM(UPPER(colonia)) = TRIM(UPPER(?))
+              AND TRIM(UPPER(COALESCE(codigo_postal, ''))) = TRIM(UPPER(?))
+              AND TRIM(UPPER(paquete)) = TRIM(UPPER(?))
+            ORDER BY fecha_creacion ASC
+            LIMIT 1
+        """, (
+            cliente_nombre, cliente_correo, calle, numero_ext, colonia,
+            codigo_postal or "", paquete,
+        )).fetchone()
+        return fila["folio"] if fila else None
+
+
 def crear_cotizacion(**campos) -> int:
     """
     Crea una cotización. Pasa los campos como keyword arguments —
@@ -375,6 +412,25 @@ def confirmar_por_asesor(cotizacion_id: int, asesor_nombre: str, notas: str = ""
                 notas = ?
             WHERE id = ?
         """, (datetime.now().isoformat(timespec="seconds"), asesor_nombre, notas, cotizacion_id))
+        conn.commit()
+    _respaldar_en_sheets()
+
+
+def cerrar_sin_venta(cotizacion_id: int, motivo: str | None = None):
+    """
+    Cierra una cotización (típicamente una solicitud manual) como "no
+    vendida" -- el cliente no confirmó, o declinó por fuera del portal.
+    Queda fuera de las listas de pendientes, pero el registro no se
+    borra: sigue apareciendo en el panel general del Administrador con
+    ese estatus, para tener historial de qué se perdió y por qué.
+    """
+    with _conn() as conn:
+        conn.execute("""
+            UPDATE cotizaciones
+            SET estatus = 'no_vendida',
+                notas = COALESCE(?, notas)
+            WHERE id = ?
+        """, (motivo, cotizacion_id))
         conn.commit()
     _respaldar_en_sheets()
 
