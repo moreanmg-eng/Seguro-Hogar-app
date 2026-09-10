@@ -41,6 +41,25 @@ def _rfc_parece_valido(rfc: str) -> bool:
     return bool(_RFC_REGEX.match(rfc.strip().upper())) if rfc else False
 
 
+def _visible_para_asesor(cot: dict, asesor: dict) -> bool:
+    """
+    True si este caso sin resolver le debe aparecer a este asesor en
+    su portal. Si ya está asignado explícitamente a él (por él mismo
+    o por el Administrador), siempre se muestra, sin importar el
+    público. Si no está asignado a nadie, solo se muestra si el
+    público del cliente se reconoce (L0/A0) y este asesor lo atiende;
+    si el público no se reconoce, no se le muestra a ningún asesor —
+    se queda para que el Administrador lo revise y lo asigne (ver
+    "Clientes sin público identificado" en su panel).
+    """
+    if cot.get("asesor_asignado"):
+        return cot["asesor_asignado"] == asesor["nombre"]
+    return (
+        asesores_mod.publico_reconocido(cot.get("nomina"))
+        and asesores_mod.asesor_atiende_nomina(asesor, cot.get("nomina"))
+    )
+
+
 PLACEHOLDER_PAGO = "Selecciona una opción"
 
 ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD", "cambia-esta-clave")
@@ -48,7 +67,7 @@ ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD", "cambia-esta-clave")
 ASSETS_DIR = Path(__file__).parent / "assets"
 LOGO_BROKER = ASSETS_DIR / "logo_raspberry.png"
 LOGO_ASEGURADORA = ASSETS_DIR / "logo_zurich.png"
-AVISO_PRIVACIDAD_PATH = ASSETS_DIR / "aviso_privacidad.md"
+AVISO_PRIVACIDAD_URL = "https://www.raspberry.mx/assets/docs/AvisoPrivacidadRaspberrySalud.pdf"
 
 st.set_page_config(page_title="Cotizador de Seguro de Hogar", page_icon="🏠", layout="centered")
 
@@ -326,14 +345,14 @@ if vista == "Cliente":
         )
 
     st.divider()
-    if AVISO_PRIVACIDAD_PATH.exists():
-        with st.expander("📄 Ver Aviso de Privacidad"):
-            st.markdown(AVISO_PRIVACIDAD_PATH.read_text(encoding="utf-8"))
-        acepto_privacidad = st.checkbox(
-            "He leído y acepto el Aviso de Privacidad *", key="c_acepto_privacidad",
-        )
-    else:
-        acepto_privacidad = True  # si no existe el archivo, no se bloquea la cotización
+    st.markdown(
+        "Consulta nuestro aviso de privacidad en nueva página aquí "
+        f'<a href="{AVISO_PRIVACIDAD_URL}" target="_blank" rel="noopener noreferrer">Aviso de Privacidad</a>',
+        unsafe_allow_html=True,
+    )
+    acepto_privacidad = st.checkbox(
+        "He leído y acepto el Aviso de Privacidad *", key="c_acepto_privacidad",
+    )
 
     if st.button("Cotizar", type="primary", disabled=not acepto_privacidad):
         faltantes = []
@@ -463,7 +482,14 @@ if vista == "Cliente":
                 ],
                 key="c_decision",
             )
-            asesores_disponibles = asesores_mod.asesores_para_publico(cot.get("nomina"))
+            # Si no reconocemos el público del cliente (L0/A0), no le
+            # sugerimos ningún asesor específico -- el caso se queda sin
+            # asignar para que el Administrador lo revise y lo reparta él
+            # mismo (ver "Clientes sin público identificado" en su panel).
+            if asesores_mod.publico_reconocido(cot.get("nomina")):
+                asesores_disponibles = asesores_mod.asesores_para_publico(cot.get("nomina"))
+            else:
+                asesores_disponibles = asesores_mod.cargar_asesores().iloc[0:0]
             asesor_pref = st.selectbox(
                 "Asesor de preferencia (opcional)",
                 ["Cualquiera disponible"] + asesores_disponibles["nombre"].tolist(),
@@ -490,7 +516,9 @@ if vista == "Cliente":
                     )
                     cot_actualizada = db.obtener(cot_id)
 
-                    nombre_para_correo = asesor_asignado or asesores_disponibles.iloc[0]["nombre"]
+                    nombre_para_correo = asesor_asignado or (
+                        asesores_disponibles.iloc[0]["nombre"] if not asesores_disponibles.empty else None
+                    )
                     correo_asesor = asesores_mod.correo_de(nombre_para_correo)
                     r = email_utils.notificar_cliente_confirmacion_contratacion(cot_actualizada, correo_asesor)
                     avisar_si_fallo_correo(r)
@@ -511,7 +539,9 @@ if vista == "Cliente":
                     )
                     cot_actualizada = db.obtener(cot_id)
 
-                    nombre_para_correo = asesor_asignado or asesores_disponibles.iloc[0]["nombre"]
+                    nombre_para_correo = asesor_asignado or (
+                        asesores_disponibles.iloc[0]["nombre"] if not asesores_disponibles.empty else None
+                    )
                     correo_asesor = asesores_mod.correo_de(nombre_para_correo)
                     if correo_asesor:
                         r = email_utils.notificar_asesor_nuevo_interesado(
@@ -558,11 +588,7 @@ elif vista == "Asesor":
 
     st.divider()
     st.subheader("Prospectos interesados (pendientes de confirmar emisión)")
-    interesados = [
-        c for c in db.listar(estatus="interesado")
-        if c["asesor_asignado"] in (None, "", asesor["nombre"])
-        and asesores_mod.asesor_atiende_nomina(asesor, c.get("nomina"))
-    ]
+    interesados = [c for c in db.listar(estatus="interesado") if _visible_para_asesor(c, asesor)]
     if not interesados:
         st.info("No tienes prospectos pendientes por ahora.")
     for cot in interesados:
@@ -618,11 +644,7 @@ elif vista == "Asesor":
 
     st.divider()
     st.subheader("Solicitudes de cotización manual (suma mayor a los paquetes)")
-    manuales = [
-        c for c in db.listar(estatus="solicitud_manual")
-        if c["asesor_asignado"] in (None, "", asesor["nombre"])
-        and asesores_mod.asesor_atiende_nomina(asesor, c.get("nomina"))
-    ]
+    manuales = [c for c in db.listar(estatus="solicitud_manual") if _visible_para_asesor(c, asesor)]
     if not manuales:
         st.info("No hay solicitudes manuales pendientes por ahora.")
     for cot in manuales:
@@ -882,6 +904,58 @@ elif vista == "Administrador":
         )
 
     st.divider()
+    st.subheader("🧭 Clientes sin público identificado (no iniciaron con L0 ni A0)")
+    st.caption(
+        "Estos clientes no registraron una nómina/matrícula que empiece "
+        "con L0 o A0, así que el sistema no puede saber automáticamente a "
+        "qué asesor le corresponden — por eso no se le muestran a ningún "
+        "asesor todavía. Revisa la nómina/matrícula que dejaron para "
+        "identificar a qué público pertenecen y asígnalos tú mismo a "
+        "quien corresponda."
+    )
+    sin_publico = [
+        c for c in db.listar()
+        if c["estatus"] in ("cotizada", "interesado", "solicitud_manual")
+        and not asesores_mod.publico_reconocido(c.get("nomina"))
+        and not c.get("asesor_asignado")
+    ]
+    if not sin_publico:
+        st.info("No hay clientes pendientes de identificar por ahora.")
+    for cot in sin_publico:
+        detalle = (
+            f"{cot['paquete']} ({cot['tipo_paquete']})" if cot.get("paquete")
+            else (f"suma deseada ${cot['suma_deseada']:,.0f}" if cot.get("suma_deseada") else "—")
+        )
+        titulo = (
+            f"Folio {cot['folio']} — {cot['cliente_nombre']} — {detalle} — "
+            f"{ESTATUS_LEGIBLE.get(cot['estatus'], cot['estatus'])}"
+        )
+        with st.expander(titulo):
+            st.write(f"**Nómina/Matrícula ingresada:** {cot.get('nomina') or '— (no la dejó)'}")
+            st.write(f"**Correo:** {cot['cliente_correo']}")
+            st.write(f"**Teléfono:** {cot['cliente_telefono']}")
+            st.write(f"**Forma de pago deseada:** {cot.get('forma_pago') or '—'}")
+            if cot.get("prima_total"):
+                st.write(f"**Prima total:** ${cot['prima_total']:,.2f} MXN")
+            st.write(f"**Código postal:** {cot['codigo_postal']}")
+            if cot.get("pdf_cotizacion_path") and Path(cot["pdf_cotizacion_path"]).exists():
+                with open(cot["pdf_cotizacion_path"], "rb") as f:
+                    st.download_button("📄 Ver cotización", f, file_name=Path(cot["pdf_cotizacion_path"]).name,
+                                        key=f"sinpublico_pdf_{cot['id']}")
+
+            nombres_todos = asesores_mod.cargar_asesores()["nombre"].tolist()
+            if not nombres_todos:
+                st.warning("No hay asesores configurados en el catálogo.")
+            else:
+                asesor_elegido = st.selectbox(
+                    "Asignar a Asesor", nombres_todos, key=f"select_sinpublico_{cot['id']}",
+                )
+                if st.button("Asignar a Asesor", key=f"btn_sinpublico_{cot['id']}", use_container_width=True):
+                    db.actualizar_cotizacion(cot["id"], asesor_asignado=asesor_elegido)
+                    st.success(f"Asignado a {asesor_elegido}. Ya lo puede ver en su portal.")
+                    st.rerun()
+
+    st.divider()
     st.subheader("Cotizaciones sin seguimiento (el cliente solo cotizó)")
     st.caption(
         "Aquí aparecen los clientes que generaron su cotización pero no "
@@ -889,7 +963,10 @@ elif vista == "Administrador":
         "contacten, ni confirmaron contratar). Puedes asignarle un asesor "
         "para que le dé seguimiento por su cuenta y cierre la venta."
     )
-    sin_seguimiento = db.listar(estatus="cotizada")
+    sin_seguimiento = [
+        c for c in db.listar(estatus="cotizada")
+        if asesores_mod.publico_reconocido(c.get("nomina"))
+    ]
     if not sin_seguimiento:
         st.info("No hay cotizaciones sin seguimiento por ahora.")
     for cot in sin_seguimiento:
