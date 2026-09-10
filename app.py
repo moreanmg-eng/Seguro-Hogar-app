@@ -203,7 +203,20 @@ ESTATUS_LEGIBLE = {
     "descartada": "Descartada",
 }
 
-vista = st.sidebar.radio("¿Quién eres?", ["Cliente", "Asesor", "Administrador"])
+# El cliente entra con la liga normal de la app (sin nada agregado al
+# final) y ve directo el formulario de cotizar, sin ningún rastro de
+# que existen los modos Asesor/Administrador. Para que los asesores y
+# el administrador puedan elegir su rol, se les comparte una liga
+# especial con "?panel=staff" agregado al final -- por ejemplo:
+# https://tuapp.streamlit.app/?panel=staff -- solo con esa liga
+# aparece el selector "¿Quién eres?" en la barra lateral; con la liga
+# normal, ese selector ni siquiera se dibuja.
+es_panel_staff = st.query_params.get("panel") == "staff"
+
+if es_panel_staff:
+    vista = st.sidebar.radio("¿Quién eres?", ["Cliente", "Asesor", "Administrador"])
+else:
+    vista = "Cliente"
 if email_utils.MODO_SIMULADO:
     st.sidebar.warning(
         "Modo simulado: no hay credenciales de correo configuradas, así que "
