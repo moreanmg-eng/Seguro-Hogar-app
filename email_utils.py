@@ -66,18 +66,38 @@ def _aplicar_negritas(texto_escapado: str) -> str:
     return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", texto_escapado, flags=re.DOTALL)
 
 
+def _aplicar_cursivas(texto_escapado: str) -> str:
+    """
+    Convierte _texto_ en <em>texto</em>, para poder marcar texto en
+    cursivas directo desde las plantillas .txt: en el archivo, encierra
+    la palabra o frase entre guiones bajos, por ejemplo "_Nota_".
+
+    Igual que _aplicar_negritas(), se aplica DESPUÉS de html.escape(),
+    por seguridad.
+
+    Nota: si un mismo párrafo trae un dato real con guion bajo (por
+    ejemplo un correo como "juan_perez@gmail.com") Y en ese mismo
+    párrafo hay una marca de cursivas con "_..._", en teoría podrían
+    combinarse mal. En la práctica es muy poco probable (se necesitan
+    dos guiones bajos "sueltos" en el mismo párrafo), pero si algún
+    correo real trae guion bajo, evita usar cursivas en ese mismo
+    párrafo.
+    """
+    return re.sub(r"_(.+?)_", r"<em>\1</em>", texto_escapado, flags=re.DOTALL)
+
+
 def _cuerpo_a_html(cuerpo: str) -> str:
     """
     Convierte el cuerpo de texto plano de la plantilla a un HTML
     simple (mismos saltos de línea/párrafos), e inserta el logo justo
     debajo de la línea de firma "Raspberry | Hogar", si esa línea
-    existe en el correo. También convierte **texto** en negritas
-    (ver _aplicar_negritas).
+    existe en el correo. También convierte **texto** en negritas y
+    _texto_ en cursivas (ver _aplicar_negritas y _aplicar_cursivas).
     """
     parrafos = cuerpo.strip("\n").split("\n\n")
     html_parrafos = [
         "<p style='margin:0 0 1em 0;'>"
-        + _aplicar_negritas(html.escape(p).replace("\n", "<br>"))
+        + _aplicar_cursivas(_aplicar_negritas(html.escape(p).replace("\n", "<br>")))
         + "</p>"
         for p in parrafos
     ]
