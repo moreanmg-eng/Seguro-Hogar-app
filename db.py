@@ -435,6 +435,25 @@ def cerrar_sin_venta(cotizacion_id: int, motivo: str | None = None):
     _respaldar_en_sheets()
 
 
+def descartar_cotizacion(cotizacion_id: int, motivo: str | None = None):
+    """
+    Descarta una cotización que solo se quedó "cotizada" (el cliente no
+    hizo nada después) para que ya no le sature al Administrador la
+    lista de "Cotizaciones sin seguimiento". El registro NO se borra:
+    sigue apareciendo en el "Panel general de todas las cotizaciones"
+    con el estatus "descartada", para tener historial.
+    """
+    with _conn() as conn:
+        conn.execute("""
+            UPDATE cotizaciones
+            SET estatus = 'descartada',
+                notas = COALESCE(?, notas)
+            WHERE id = ?
+        """, (motivo, cotizacion_id))
+        conn.commit()
+    _respaldar_en_sheets()
+
+
 def registrar_emision(cotizacion_id: int, poliza_pdf_path: str, numero_poliza: str | None = None,
                        monto_descuento_nomina: float | None = None):
     """

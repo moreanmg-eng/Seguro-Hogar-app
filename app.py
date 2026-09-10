@@ -174,6 +174,24 @@ def _dialog_cerrar_sin_venta(cot: dict):
         st.rerun()
 
 
+@st.dialog("¿Confirma que desea descartar esta cotización?")
+def _dialog_descartar_cotizacion(cot: dict):
+    st.write(
+        f"Vas a descartar la cotización del folio **{cot['folio']}** — "
+        f"**{cot['cliente_nombre']}**. Ya no aparecerá en \"Cotizaciones "
+        "sin seguimiento\", pero se queda en el Panel general de todas "
+        "las cotizaciones, con estatus \"Descartada\"."
+    )
+    col_confirmar, col_cancelar = st.columns(2)
+    if col_confirmar.button("🗑️ Confirmar", type="primary", use_container_width=True,
+                             key=f"dlg_confirmar_descarte_{cot['id']}"):
+        db.descartar_cotizacion(cot["id"])
+        st.success("Cotización descartada.")
+        st.rerun()
+    if col_cancelar.button("Cancelar", use_container_width=True, key=f"dlg_cancelar_descarte_{cot['id']}"):
+        st.rerun()
+
+
 ESTATUS_LEGIBLE = {
     "cotizada": "Cotizada (sin decisión)",
     "interesado": "Interesado en contratar",
@@ -182,6 +200,7 @@ ESTATUS_LEGIBLE = {
     "entregada": "Entregada al cliente",
     "solicitud_manual": "Requiere cotización manual",
     "no_vendida": "No vendida (cerrada sin venta)",
+    "descartada": "Descartada",
 }
 
 vista = st.sidebar.radio("¿Quién eres?", ["Cliente", "Asesor", "Administrador"])
@@ -1119,6 +1138,9 @@ elif vista == "Administrador":
                         "\"Prospectos asignados por Administración\"."
                     )
                     st.rerun()
+
+            if st.button("🗑️ Descartar cotización", key=f"btn_descartar_{cot['id']}", use_container_width=True):
+                _dialog_descartar_cotizacion(cot)
 
     st.divider()
     st.subheader("Panel general de todas las cotizaciones")
