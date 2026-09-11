@@ -2,6 +2,8 @@
 Genera el PDF de cotización que se le entrega al cliente potencial.
 """
 
+import re
+import unicodedata
 from pathlib import Path
 from datetime import datetime
 from reportlab.lib.pagesizes import letter
@@ -23,6 +25,9 @@ LOGO_ASEGURADORA = ASSETS_DIR / "logo_zurich.png"      # Zurich — la asegurado
 styles = getSampleStyleSheet()
 titulo_style = ParagraphStyle("TituloSeguro", parent=styles["Title"], textColor=colors.HexColor("#1a3d6d"))
 subtitulo_style = ParagraphStyle("Subtitulo", parent=styles["Heading2"], textColor=colors.HexColor("#1a3d6d"))
+nota_gris_style = ParagraphStyle(
+    "NotaGris", parent=styles["Normal"], textColor=colors.HexColor("#777777"), fontSize=8,
+)
 
 TIPO_PAQUETE_LEGIBLE = {
     "propietario": "Propietario (inmueble + contenidos)",
@@ -62,6 +67,40 @@ def _logo_encabezado():
     return t
 
 
+def _slug_nombre_archivo(nombre_completo: str) -> str:
+    """
+    A partir del nombre completo del cliente (un solo campo de texto
+    libre, sin apellidos separados) arma un fragmento "Apellido_Nombre"
+    para personalizar el nombre del archivo del PDF, siguiendo la
+    convención mexicana "Nombre(s) Apellido Paterno Apellido Materno":
+
+      - 1 palabra:  se usa tal cual.
+      - 2 palabras: se asume "Nombre Apellido".
+      - 3+ palabras: se asume que las últimas dos son los apellidos
+        (paterno y materno) y se toma el paterno (penúltima palabra);
+        todo lo anterior son nombre(s), de los cuales se toma el primero.
+
+    Quita acentos y cualquier caracter que no sea válido en un nombre
+    de archivo. Si no hay nada utilizable, regresa "Cliente".
+    """
+    tokens = (nombre_completo or "").split()
+    if not tokens:
+        return "Cliente"
+    if len(tokens) == 1:
+        primer_nombre, primer_apellido = tokens[0], ""
+    elif len(tokens) == 2:
+        primer_nombre, primer_apellido = tokens[0], tokens[1]
+    else:
+        primer_nombre, primer_apellido = tokens[0], tokens[-2]
+
+    def _limpiar(palabra: str) -> str:
+        sin_acentos = unicodedata.normalize("NFKD", palabra).encode("ascii", "ignore").decode("ascii")
+        return re.sub(r"[^A-Za-z0-9]", "", sin_acentos)
+
+    partes = [p for p in (_limpiar(primer_apellido), _limpiar(primer_nombre)) if p]
+    return "_".join(partes) or "Cliente"
+
+
 def generar_pdf_cotizacion(datos_cliente: dict, cotizacion: dict, cotizacion_id: int,
                             folio: str | None = None) -> str:
     """
@@ -74,9 +113,10 @@ def generar_pdf_cotizacion(datos_cliente: dict, cotizacion: dict, cotizacion_id:
            (solo para no romper llamadas viejas).
     Regresa la ruta del PDF generado.
     """
-    nombre_archivo = f"cotizacion_{cotizacion_id:05d}.pdf"
-    ruta = SALIDA_DIR / nombre_archivo
     folio_mostrado = folio or f"{cotizacion_id:05d}"
+    slug_cliente = _slug_nombre_archivo(datos_cliente.get("nombre") or "")
+    nombre_archivo = f"Cot_Hogar_{slug_cliente}_{folio_mostrado}.pdf"
+    ruta = SALIDA_DIR / nombre_archivo
 
     doc = SimpleDocTemplate(str(ruta), pagesize=letter,
                              topMargin=1.6 * cm, bottomMargin=1.6 * cm)
@@ -88,8 +128,14 @@ def generar_pdf_cotizacion(datos_cliente: dict, cotizacion: dict, cotizacion_id:
     elementos.append(Paragraph(
         f"Folio: {folio_mostrado} &nbsp;&nbsp;|&nbsp;&nbsp; "
         f"Fecha de cotización: {cotizacion['fecha_cotizacion'].strftime('%d/%m/%Y')} "
-        f"&nbsp;&nbsp;|&nbsp;&nbsp; Vigente hasta: {cotizacion['fecha_fin_vigencia'].strftime('%d/%m/%Y')}",
+        f"&nbsp;&nbsp;|&nbsp;&nbsp; Vigente hasta: {cotizacion['fecha_fin_vigencia'].strftime('%d/%m/%Y')} "
+        "(fin de vigencia de la póliza en caso de contratar)",
         styles["Normal"]
+    ))
+    elementos.append(Paragraph(
+        "Esta cotización tiene una vigencia de 5 días naturales a partir de su entrega, "
+        "por lo que una vez transcurrido este tiempo, será necesario cotizar nuevamente.",
+        nota_gris_style
     ))
     elementos.append(Spacer(1, 0.5 * cm))
 
