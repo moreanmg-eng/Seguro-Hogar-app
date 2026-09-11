@@ -138,7 +138,7 @@ def _cuerpo_a_html(cuerpo: str, incluir_icono: bool = True) -> str:
 
     firma_html = "<p style='margin:0 0 1em 0;'>" + html.escape("Raspberry | Hogar") + "</p>"
     icono_img_html = (
-        f"<img src='cid:{ICONO_HOGAR_CID}' alt='' "
+        f"<img src='cid:{ICONO_HOGAR_CID}' alt='' width='20' height='20' "
         "style='height:20px;width:20px;vertical-align:middle;margin-right:6px;'>"
         if incluir_icono else ""
     )
@@ -150,7 +150,7 @@ def _cuerpo_a_html(cuerpo: str, incluir_icono: bool = True) -> str:
     )
     logo_html = (
         f"<p style='margin:0 0 1em 0;'><img src='cid:{LOGO_CID}' alt='Raspberry' "
-        "style='max-width:160px;height:auto;'></p>"
+        "width='160' height='35' style='max-width:160px;height:auto;'></p>"
     )
     if firma_html in html_parrafos:
         idx = html_parrafos.index(firma_html)
