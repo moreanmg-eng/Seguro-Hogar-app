@@ -19,6 +19,7 @@ que puedas probar todo el flujo sin credenciales reales.
 """
 
 import html
+import mimetypes
 import re
 import smtplib
 from email.message import EmailMessage
@@ -41,6 +42,29 @@ ADJUNTOS_ENTREGA_POLIZA = [
     BASE_DIR / "assets" / "cuponera_asistencias_hogar.pdf",
     BASE_DIR / "assets" / "guia_asegurado_hogar.pdf",
 ]
+
+# Tarjetas de contacto de los asesores (.jpg), para adjuntarlas -- como
+# archivo aparte, NO dentro del PDF de la cotización/póliza -- en los
+# correos al cliente que se mandan en cuanto ya se le asignó un asesor
+# específico. El nombre debe coincidir tal cual con la columna
+# "nombre" del Excel de asesores. Un asesor sin tarjeta aquí (por
+# ejemplo uno nuevo del que todavía no tenemos foto) simplemente no
+# lleva adjunto -- no truena el envío del correo.
+TARJETAS_ASESOR = {
+    "Fernando Muñoz": BASE_DIR / "assets" / "asesores" / "tarjeta_fernando_munoz.jpg",
+    "Martín Morales": BASE_DIR / "assets" / "asesores" / "tarjeta_martin_morales.jpg",
+}
+
+
+def _adjunto_tarjeta_asesor(asesor_nombre: str | None) -> list[str]:
+    """Regresa, como lista de 0 o 1 rutas, la tarjeta de contacto del
+    asesor indicado -- lista para agregarse directo a un `adjuntos=`
+    de enviar_correo() con "+". Lista vacía si no hay asesor, o si ese
+    asesor no tiene tarjeta configurada todavía."""
+    if not asesor_nombre:
+        return []
+    ruta = TARJETAS_ASESOR.get(asesor_nombre)
+    return [str(ruta)] if ruta and ruta.exists() else []
 
 # Logo que se inserta debajo de la firma "Raspberry | Hogar" en todos
 # los correos automáticos (nada más para verse más profesional; si no
@@ -198,9 +222,11 @@ def enviar_correo(destinatario: str, asunto: str, cuerpo: str, adjuntos: list[st
     for ruta_adjunto in adjuntos:
         p = Path(ruta_adjunto)
         if p.exists():
+            tipo_adivinado, _ = mimetypes.guess_type(p.name)
+            maintype, _, subtype = (tipo_adivinado or "application/octet-stream").partition("/")
             with open(p, "rb") as f:
                 msg.add_attachment(
-                    f.read(), maintype="application", subtype="pdf", filename=p.name
+                    f.read(), maintype=maintype, subtype=subtype, filename=p.name
                 )
 
     try:
@@ -281,11 +307,14 @@ def notificar_asesor_nuevo_interesado(cotizacion: dict, correo_asesor: str, ases
     return enviar_correo(correo_asesor, asunto, cuerpo, adjuntos=[cotizacion.get("pdf_cotizacion_path")] if cotizacion.get("pdf_cotizacion_path") else [])
 
 
-def notificar_cliente_confirmacion_contratacion(cotizacion: dict, correo_asesor: str | None = None):
+def notificar_cliente_confirmacion_contratacion(cotizacion: dict, correo_asesor: str | None = None,
+                                                  asesor_nombre: str | None = None):
     """Se dispara cuando el cliente elige 'Sí, quiero contratar' — le
     llega al propio cliente confirmando que se recibió su solicitud,
     con copia (CC) al asesor asignado para que también quede
-    enterado."""
+    enterado. Si ya se sabe qué asesor específico le toca (no
+    "Cualquiera disponible"), se le adjunta también su tarjeta de
+    contacto en .jpg -- como archivo aparte, no dentro de ningún PDF."""
     asunto, cuerpo = _cargar_plantilla(
         "confirmacion_contratacion_cliente.txt",
         cliente_nombre=cotizacion["cliente_nombre"],
@@ -293,6 +322,7 @@ def notificar_cliente_confirmacion_contratacion(cotizacion: dict, correo_asesor:
     )
     return enviar_correo(
         cotizacion["cliente_correo"], asunto, cuerpo, copia_a=correo_asesor,
+        adjuntos=_adjunto_tarjeta_asesor(asesor_nombre),
     )
 
 
@@ -376,9 +406,10 @@ def notificar_cliente_poliza_entregada(cotizacion: dict, ruta_poliza: str, aseso
     """
     Se dispara cuando el asesor da clic en "Marcar como entregada al
     cliente": le manda al cliente su póliza en PDF, junto con la
-    cuponera de asistencias y la guía del asegurado, y le manda una
-    copia (CC) al propio asesor como respaldo de que ya se la
-    entregó.
+    cuponera de asistencias, la guía del asegurado y la tarjeta de
+    contacto de su asesor (.jpg, como archivo aparte -- no dentro de
+    ningún PDF), y le manda una copia (CC) al propio asesor como
+    respaldo de que ya se la entregó.
 
     El cuerpo del correo vive en
     assets/plantillas_correo/poliza_entregada_cliente.txt — edítalo
@@ -397,7 +428,11 @@ def notificar_cliente_poliza_entregada(cotizacion: dict, ruta_poliza: str, aseso
         asesor_nombre=asesor_nombre,
         info_pago=info_pago,
     )
-    adjuntos = [ruta_poliza] + [str(p) for p in ADJUNTOS_ENTREGA_POLIZA if p.exists()]
+    adjuntos = (
+        [ruta_poliza]
+        + [str(p) for p in ADJUNTOS_ENTREGA_POLIZA if p.exists()]
+        + _adjunto_tarjeta_asesor(asesor_nombre)
+    )
     return enviar_correo(
         cotizacion["cliente_correo"], asunto, cuerpo,
         adjuntos=adjuntos, copia_a=correo_asesor,

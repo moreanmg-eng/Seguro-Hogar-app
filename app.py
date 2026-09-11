@@ -665,7 +665,9 @@ if vista == "Cliente":
                         asesores_disponibles.iloc[0]["nombre"] if not asesores_disponibles.empty else None
                     )
                     correo_asesor = asesores_mod.correo_de(nombre_para_correo)
-                    r = email_utils.notificar_cliente_confirmacion_contratacion(cot_actualizada, correo_asesor)
+                    r = email_utils.notificar_cliente_confirmacion_contratacion(
+                        cot_actualizada, correo_asesor, asesor_nombre=asesor_asignado,
+                    )
                     avisar_si_fallo_correo(r)
 
                     st.success("¡Gracias! Un asesor se pondrá en contacto contigo en breve.")
